@@ -1,0 +1,10 @@
+fastapi
+uvicorn[standard]
+python-dotenv
+pydantic-settings
+spotipy
+librosa
+numpy
+requests
+lyricsgenius
+anthropic
