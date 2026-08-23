@@ -1,7 +1,7 @@
 ## Playlist Vibe Filter — Setup Checklist
 
-- [ ] **0. Confirm audio source** — check `preview_url` coverage for your playlist's tracks; decide fallback if spotty. *(research only, no push)*
-- [ ] **1. Repo scaffold** — `git init`, create file structure, `.env.example`
+- [x] **0. Confirm audio source** — Spotify `preview_url` is null for all apps created after Nov 27, 2024, and Premium/Web Playback SDK doesn't provide raw audio either (playback-only, DRM'd). **Fallback: iTunes Search API** (`itunes.apple.com/search`, free, no auth) for 30s previews — match by artist/track text + `trackTimeMillis` vs. Spotify's `duration_ms` (~2-3s tolerance) since ISRC lookup isn't available on the free endpoint. Low-confidence matches get flagged as "no match" rather than guessed. *(research only, no push)*
+- [x] **1. Repo scaffold** — `git init`, create file structure, `.env.example`
   → **push:** initial scaffold commit
 - [ ] **1b. Spotify dev app** — register app, allowlist your account *(no code, no push)*
 - [ ] **2. OAuth flow** — login, callback, token storage/refresh in `auth/spotify_oauth.py`
@@ -12,7 +12,7 @@
   → **push:** playlist fetch + schema
 - [ ] **5. Hand-label eval set** — ~50 songs, vibes, `tests/eval_labels.csv` *(runs in parallel with 6–8)*
   → **push:** eval labels file, whenever it's ready
-- [ ] **6. Librosa audio features** — `pipeline/audio_features.py`
+- [ ] **6. Librosa audio features** — `pipeline/audio_features.py`; source audio via iTunes Search API preview fallback (see step 0)
   → **push:** audio feature extraction
 - [ ] **7. Lyrics + LLM description** — `pipeline/lyrics.py`, `pipeline/describe.py`
   → **push:** description generation
