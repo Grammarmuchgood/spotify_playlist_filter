@@ -3,12 +3,12 @@
 - [x] **0. Confirm audio source** — Spotify `preview_url` is null for all apps created after Nov 27, 2024, and Premium/Web Playback SDK doesn't provide raw audio either (playback-only, DRM'd). **Fallback: iTunes Search API** (`itunes.apple.com/search`, free, no auth) for 30s previews — match by artist/track text + `trackTimeMillis` vs. Spotify's `duration_ms` (~2-3s tolerance) since ISRC lookup isn't available on the free endpoint. Low-confidence matches get flagged as "no match" rather than guessed. *(research only, no push)*
 - [x] **1. Repo scaffold** — `git init`, create file structure, `.env.example`
   → **push:** initial scaffold commit
-- [ ] **1b. Spotify dev app** — register app, allowlist your account *(no code, no push)*
-- [ ] **2. OAuth flow** — login, callback, token storage/refresh in `auth/spotify_oauth.py`
+- [x] **1b. Spotify dev app** — register app, allowlist your account *(no code, no push)*
+- [x] **2. OAuth flow** — login, callback, token storage/refresh in `auth/spotify_oauth.py`
   → **push:** working OAuth login
-- [ ] **3. Write-back smoke test** — throwaway "create empty playlist" call to confirm write scope
+- [x] **3. Write-back smoke test** — throwaway "create empty playlist" call to confirm write scope. Found Spotify's Feb 2026 API migration killed `/users/{id}/playlists` for Dev Mode apps (`spotipy`'s `user_playlist_create()` still targets it and 403s) — replacement is `POST /me/playlists`, called directly via `sp._post()`. Same `/tracks` → `/items` rename will hit step 4 and step 7's track-adding call.
   → **push:** fold into OAuth commit or its own tiny commit
-- [ ] **4. Playlist fetch + DB schema** — `fetch_playlist.py`, `db/models.py`, pull real playlist into SQLite
+- [ ] **4. Playlist fetch + DB schema** — `fetch_playlist.py`, `db/models.py`, pull real playlist into SQLite; use `/playlists/{id}/items` not `/tracks` (see step 3 note)
   → **push:** playlist fetch + schema
 - [ ] **5. Hand-label eval set** — ~50 songs, vibes, `tests/eval_labels.csv` *(runs in parallel with 6–8)*
   → **push:** eval labels file, whenever it's ready
