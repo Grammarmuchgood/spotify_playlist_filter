@@ -8,7 +8,7 @@
   → **push:** working OAuth login
 - [x] **3. Write-back smoke test** — throwaway "create empty playlist" call to confirm write scope. Found Spotify's Feb 2026 API migration killed `/users/{id}/playlists` for Dev Mode apps (`spotipy`'s `user_playlist_create()` still targets it and 403s) — replacement is `POST /me/playlists`, called directly via `sp._post()`. Same `/tracks` → `/items` rename will hit step 4 and step 7's track-adding call.
   → **push:** fold into OAuth commit or its own tiny commit
-- [ ] **4. Playlist fetch + DB schema** — `fetch_playlist.py`, `db/models.py`, pull real playlist into SQLite; use `/playlists/{id}/items` not `/tracks` (see step 3 note)
+- [x] **4. Playlist fetch + DB schema** — `fetch_playlist.py`, `db/models.py`, pull real playlist into SQLite; use `/playlists/{id}/items` not `/tracks` (see step 3 note). Target playlist: **"When"** (`4Jlag9nPT6xEKjNa515hUB`, 653 tracks). Also found the `track` key itself renamed to `item` in Feb 2026 migration. 647/653 stored — 4 local files (no catalog entry) and 2 null/removed tracks legitimately skipped; one track had a null artist name, handled with a fallback filter.
   → **push:** playlist fetch + schema
 - [ ] **5. Hand-label eval set** — ~50 songs, vibes, `tests/eval_labels.csv` *(runs in parallel with 6–8)*
   → **push:** eval labels file, whenever it's ready
