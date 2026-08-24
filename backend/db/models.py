@@ -6,6 +6,7 @@ CREATE TABLE IF NOT EXISTS songs (
     name TEXT NOT NULL,
     artist TEXT NOT NULL,
     album TEXT,
+    release_date TEXT,
     duration_ms INTEGER,
     isrc TEXT,
     audio_features TEXT,
