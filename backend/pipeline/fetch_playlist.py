@@ -28,14 +28,15 @@ def save_tracks(items: list[dict]) -> int:
             continue
         conn.execute(
             """
-            INSERT OR REPLACE INTO songs (track_id, name, artist, album, duration_ms, isrc, fetched_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+            INSERT OR REPLACE INTO songs (track_id, name, artist, album, release_date, duration_ms, isrc, fetched_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 track["id"],
                 track["name"],
                 ", ".join(a["name"] for a in track["artists"] if a.get("name")),
                 track["album"]["name"],
+                track["album"].get("release_date"),
                 track["duration_ms"],
                 track.get("external_ids", {}).get("isrc"),
                 now,
