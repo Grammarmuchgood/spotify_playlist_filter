@@ -12,7 +12,7 @@
   → **push:** playlist fetch + schema
 - [x] **5. Hand-label eval set** — ~50 songs, vibes, `tests/eval_labels.csv` *(runs in parallel with 6–8)*. Schema: `energy` (low/medium/high, sonic feel) split from `mood` (lyrical/emotional tone) — deliberately separate so compound cases (upbeat production + sad lyrics, etc.) are captured rather than averaged away. `context_tags` and `notes` describe theme and real-world listening context. Drafted from research, reviewed and corrected by hand.
   → **push:** eval labels file, whenever it's ready
-- [ ] **6. Librosa audio features** — `pipeline/audio_features.py`; source audio via iTunes Search API preview fallback (see step 0)
+- [x] **6. Librosa audio features** — `pipeline/audio_features.py`; source audio via iTunes Search API preview fallback (see step 0). Matching by duration (±3s) validated against real data. Two bugs found and fixed: (1) `librosa.load` can't decode the AAC/m4a preview from an in-memory buffer without `ffmpeg` — needs a real temp file on disk. (2) Word-thresholds for energy/timbre/texture must be calibrated against the corpus's actual percentile distribution, not guessed absolute cutoffs — the first pass called almost every track "acoustic-leaning" and "high energy" regardless of genre, which would've made every song's description nearly identical. `generate_descriptions()` now computes tertiles across the whole corpus and buckets relative to that.
   → **push:** audio feature extraction
 - [ ] **7. Lyrics + LLM description** — `pipeline/lyrics.py`, `pipeline/describe.py`
   → **push:** description generation
