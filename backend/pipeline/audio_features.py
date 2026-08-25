@@ -41,7 +41,7 @@ def _similarity(a: str, b: str) -> float:
     return SequenceMatcher(None, _normalize(a), _normalize(b)).ratio()
 
 
-def find_itunes_preview(track_name: str, artist: str, duration_ms: int) -> str | None:
+def find_itunes_match(track_name: str, artist: str, duration_ms: int) -> dict | None:
     primary_artist = artist.split(",")[0].strip()
     _throttle_itunes()
     resp = requests.get(
@@ -66,7 +66,7 @@ def find_itunes_preview(track_name: str, artist: str, duration_ms: int) -> str |
 
     if best is None or best_score < MIN_NAME_SIMILARITY:
         return None
-    return best["previewUrl"]
+    return best
 
 
 def extract_features(preview_url: str) -> dict:
@@ -97,14 +97,15 @@ def extract_features(preview_url: str) -> dict:
 
 
 def process_song(track_name: str, artist: str, duration_ms: int) -> dict:
-    preview_url = find_itunes_preview(track_name, artist, duration_ms)
-    if preview_url is None:
+    match = find_itunes_match(track_name, artist, duration_ms)
+    if match is None:
         return {"status": "no_itunes_match"}
     try:
-        features = extract_features(preview_url)
+        features = extract_features(match["previewUrl"])
     except Exception as exc:
         return {"status": "extraction_failed", "error": str(exc)}
     features["status"] = "ok"
+    features["itunes_genre"] = match.get("primaryGenreName")
     return features
 
 
@@ -127,6 +128,27 @@ def fetch_and_store_audio_features(limit: int | None = None) -> dict:
 
     conn.close()
     return counts
+
+
+def backfill_genre() -> int:
+    """For rows processed before itunes_genre was captured: re-run just the cheap
+    iTunes search (no audio download/Librosa) to fill in the missing field."""
+    conn = get_connection()
+    rows = conn.execute("SELECT track_id, name, artist, duration_ms, audio_features FROM songs WHERE audio_features IS NOT NULL").fetchall()
+
+    count = 0
+    for row in rows:
+        data = json.loads(row["audio_features"])
+        if data.get("status") != "ok" or "itunes_genre" in data:
+            continue
+        match = find_itunes_match(row["name"], row["artist"], row["duration_ms"])
+        data["itunes_genre"] = match.get("primaryGenreName") if match else None
+        conn.execute("UPDATE songs SET audio_features = ? WHERE track_id = ?", (json.dumps(data), row["track_id"]))
+        conn.commit()
+        count += 1
+
+    conn.close()
+    return count
 
 
 def compute_thresholds(conn) -> dict:
