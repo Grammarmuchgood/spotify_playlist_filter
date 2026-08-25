@@ -22,10 +22,20 @@ ITUNES_MIN_INTERVAL_SECONDS = 3.5  # stay under the 20 req/min rate limit
 DURATION_TOLERANCE_MS = 3000  # how close a candidate's length must be to Spotify's duration_ms to count as the same recording
 MIN_NAME_SIMILARITY = 0.5  # reject a match even if duration matches, if the title/artist text is too dissimilar
 
-# Module-level variable - persists across function calls for as long as
-# the program runs, which is how _throttle_itunes remembers "when did I
-# last call iTunes" across many calls in a loop.
+MUSICBRAINZ_BASE_URL = "https://musicbrainz.org/ws/2"
+# MusicBrainz's usage policy requires a descriptive User-Agent identifying
+# the application - unlike iTunes, an anonymous/browser-like User-Agent
+# can get requests throttled or blocked.
+MUSICBRAINZ_USER_AGENT = "PlaylistVibeFilter/0.1 (personal project)"
+MUSICBRAINZ_MIN_INTERVAL_SECONDS = 1.0  # MusicBrainz's rate limit: 1 request/second
+MUSICBRAINZ_MIN_ARTIST_SCORE = 85  # MusicBrainz's own 0-100 relevance score for the artist-name search match
+
+# Module-level variables - persist across function calls for as long as
+# the program runs, which is how the throttle functions remember "when
+# did I last call this API" across many calls in a loop. Separate
+# variables per API since they have independent rate limits.
 _last_itunes_call = 0.0
+_last_musicbrainz_call = 0.0
 
 
 def _throttle_itunes() -> None:
@@ -42,6 +52,47 @@ def _throttle_itunes() -> None:
         # (60s / 20 = 3s minimum; 3.5s adds a small safety margin).
         time.sleep(ITUNES_MIN_INTERVAL_SECONDS - elapsed)
     _last_itunes_call = time.monotonic()
+
+
+def _throttle_musicbrainz() -> None:
+    global _last_musicbrainz_call
+    elapsed = time.monotonic() - _last_musicbrainz_call
+    if elapsed < MUSICBRAINZ_MIN_INTERVAL_SECONDS:
+        time.sleep(MUSICBRAINZ_MIN_INTERVAL_SECONDS - elapsed)
+    _last_musicbrainz_call = time.monotonic()
+
+
+def _get_with_retry(throttle_fn, url: str, params: dict, headers: dict | None = None, timeout: int = 15) -> requests.Response:
+    # Shared by both APIs: a transient failure (503, connection reset,
+    # timeout, DNS blip - all confirmed to happen in practice on this
+    # network, not hypothetical) shouldn't kill a 30-60 minute rate-limited
+    # batch run. Retries with a growing delay (1s, 2s, 4s, 8s) between
+    # attempts before finally giving up and raising.
+    last_exc = None
+    resp = None
+    for attempt in range(4):
+        throttle_fn()
+        try:
+            resp = requests.get(url, params=params, headers=headers, timeout=timeout)
+        except requests.exceptions.RequestException as exc:
+            # Raised before any response comes back at all (timeout,
+            # connection reset, DNS/routing blip) - there's no status_code
+            # to check here, so this is caught separately from a 503.
+            last_exc = exc
+            time.sleep(2**attempt)
+            continue
+        if resp.status_code != 503:
+            resp.raise_for_status()
+            return resp
+        time.sleep(2**attempt)
+    if last_exc is not None:
+        raise last_exc
+    resp.raise_for_status()
+    return resp
+
+
+def _get_musicbrainz(url: str, params: dict) -> requests.Response:
+    return _get_with_retry(_throttle_musicbrainz, url, params, headers={"User-Agent": MUSICBRAINZ_USER_AGENT})
 
 
 def _normalize(text: str) -> str:
@@ -69,13 +120,11 @@ def find_itunes_match(track_name: str, artist: str, duration_ms: int) -> dict | 
     # Search on the primary artist only - "Kanye West, Pusha T" as a
     # literal search term matches worse than "Kanye West" alone.
     primary_artist = artist.split(",")[0].strip()
-    _throttle_itunes()
-    resp = requests.get(
+    resp = _get_with_retry(
+        _throttle_itunes,
         ITUNES_SEARCH_URL,
-        params={"term": f"{primary_artist} {track_name}", "entity": "song", "limit": 5},
-        timeout=10,
+        {"term": f"{primary_artist} {track_name}", "entity": "song", "limit": 5},
     )
-    resp.raise_for_status()
     candidates = resp.json().get("results", [])
 
     # "Track the best candidate seen so far" loop: score every candidate,
@@ -185,9 +234,20 @@ def fetch_and_store_audio_features(limit: int | None = None) -> dict:
         query += f" LIMIT {int(limit)}"
     rows = conn.execute(query).fetchall()
 
-    counts = {"ok": 0, "no_itunes_match": 0, "extraction_failed": 0}
+    counts = {"ok": 0, "no_itunes_match": 0, "extraction_failed": 0, "skipped_network_error": 0}
     for row in rows:
-        result = process_song(row["name"], row["artist"], row["duration_ms"])
+        try:
+            result = process_song(row["name"], row["artist"], row["duration_ms"])
+        except requests.exceptions.RequestException:
+            # find_itunes_match's retries (in _get_with_retry) are already
+            # exhausted by this point - a real, sustained connectivity
+            # problem, not a one-off blip. Leave audio_features as NULL
+            # (don't write anything) so this row gets retried on the next
+            # run, rather than being wrongly marked "no_itunes_match" -
+            # which would mean "confirmed, permanently, no match exists"
+            # for a song we simply couldn't reach the network to check.
+            counts["skipped_network_error"] += 1
+            continue
         counts[result["status"]] = counts.get(result["status"], 0) + 1
         # SQLite has no native JSON column type, so the result dict is
         # serialized to a JSON string and stored in the TEXT column -
@@ -217,8 +277,79 @@ def backfill_genre() -> int:
         # genre from a run after this field was added.
         if data.get("status") != "ok" or "itunes_genre" in data:
             continue
-        match = find_itunes_match(row["name"], row["artist"], row["duration_ms"])
+        try:
+            match = find_itunes_match(row["name"], row["artist"], row["duration_ms"])
+        except requests.exceptions.RequestException:
+            # Same reasoning as fetch_and_store_audio_features: skip this
+            # row without writing itunes_genre at all, so a sustained
+            # network blip doesn't get wrongly recorded as "looked it up,
+            # genuinely no genre" - a future re-run will retry it.
+            continue
         data["itunes_genre"] = match.get("primaryGenreName") if match else None
+        conn.execute("UPDATE songs SET audio_features = ? WHERE track_id = ?", (json.dumps(data), row["track_id"]))
+        conn.commit()
+        count += 1
+
+    conn.close()
+    return count
+
+
+def _fetch_musicbrainz_artist_genre(artist_name: str) -> str | None:
+    """Genre isn't a per-song field on MusicBrainz - it's tagged at the artist
+    level. This is two separate calls, confirmed by testing: a search call to
+    find the artist's ID (MBID) and relevance score, then a lookup call on
+    that ID with genres included (the search endpoint doesn't return genres
+    directly, even when asked)."""
+    search_resp = _get_musicbrainz(
+        f"{MUSICBRAINZ_BASE_URL}/artist/",
+        {"query": f'artist:"{artist_name}"', "fmt": "json", "limit": 1},
+    )
+    results = search_resp.json().get("artists", [])
+    # Reject a weak match rather than risk tagging the wrong same-named
+    # artist - same defensive pattern as the iTunes matching above.
+    if not results or results[0].get("score", 0) < MUSICBRAINZ_MIN_ARTIST_SCORE:
+        return None
+    mbid = results[0]["id"]
+
+    lookup_resp = _get_musicbrainz(f"{MUSICBRAINZ_BASE_URL}/artist/{mbid}", {"fmt": "json", "inc": "genres"})
+    genres = lookup_resp.json().get("genres", [])
+    if not genres:
+        return None
+    # Genres come with a "count" - how many MusicBrainz users tagged the
+    # artist with that genre. Highest count = most agreed-upon genre.
+    top_genre = max(genres, key=lambda g: g.get("count", 0))
+    return top_genre["name"]
+
+
+def backfill_genre_musicbrainz() -> int:
+    """Adds genre from MusicBrainz specifically for tracks with no iTunes
+    match at all - there's no audio and no itunes_genre possible for these,
+    so this is a genuinely different data source, not a duplicate lookup.
+    Caches by artist within this run (not per-song) since genre is really
+    an artist-level fact on MusicBrainz, and several of the unmatched
+    tracks share an artist (e.g. multiple Kanye West / MF DOOM tracks)."""
+    conn = get_connection()
+    rows = conn.execute("SELECT track_id, artist, audio_features FROM songs WHERE audio_features IS NOT NULL").fetchall()
+
+    cache: dict[str, str | None] = {}
+    count = 0
+    for row in rows:
+        data = json.loads(row["audio_features"])
+        if data.get("status") != "no_itunes_match" or "musicbrainz_genre" in data:
+            continue
+        primary_artist = row["artist"].split(",")[0].strip()
+        if primary_artist not in cache:
+            try:
+                cache[primary_artist] = _fetch_musicbrainz_artist_genre(primary_artist)
+            except requests.exceptions.RequestException:
+                # Even after _get_musicbrainz's retries, this artist's
+                # lookup never actually completed - skip this row without
+                # writing musicbrainz_genre at all, so a future re-run
+                # still retries it. (Writing None here would look
+                # identical to "looked it up, found no genre" and this
+                # artist would never be retried again.)
+                continue
+        data["musicbrainz_genre"] = cache[primary_artist]
         conn.execute("UPDATE songs SET audio_features = ? WHERE track_id = ?", (json.dumps(data), row["track_id"]))
         conn.commit()
         count += 1
