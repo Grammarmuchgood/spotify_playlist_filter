@@ -10,7 +10,7 @@
   → **push:** fold into OAuth commit or its own tiny commit
 - [x] **4. Playlist fetch + DB schema** — `fetch_playlist.py`, `db/models.py`, pull real playlist into SQLite; use `/playlists/{id}/items` not `/tracks` (see step 3 note). Target playlist: **"When"** (`4Jlag9nPT6xEKjNa515hUB`, 653 tracks). Also found the `track` key itself renamed to `item` in Feb 2026 migration. 647/653 stored — 4 local files (no catalog entry) and 2 null/removed tracks legitimately skipped; one track had a null artist name, handled with a fallback filter.
   → **push:** playlist fetch + schema
-- [ ] **5. Hand-label eval set** — ~50 songs, vibes, `tests/eval_labels.csv` *(runs in parallel with 6–8)*
+- [x] **5. Hand-label eval set** — ~50 songs, vibes, `tests/eval_labels.csv` *(runs in parallel with 6–8)*. Schema: `energy` (low/medium/high, sonic feel) split from `mood` (lyrical/emotional tone) — deliberately separate so compound cases (upbeat production + sad lyrics, etc.) are captured rather than averaged away. `context_tags` and `notes` describe theme and real-world listening context. Drafted from research, reviewed and corrected by hand.
   → **push:** eval labels file, whenever it's ready
 - [ ] **6. Librosa audio features** — `pipeline/audio_features.py`; source audio via iTunes Search API preview fallback (see step 0)
   → **push:** audio feature extraction
