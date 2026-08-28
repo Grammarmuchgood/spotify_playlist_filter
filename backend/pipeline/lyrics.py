@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 import time
 from urllib.parse import quote
 
@@ -10,6 +11,12 @@ from pipeline.http_utils import get_with_retry
 
 LYRICS_OVH_URL = "https://api.lyrics.ovh/v1"
 LYRICS_MIN_INTERVAL_SECONDS = 1.0  # no published rate limit, but be a good citizen of a free volunteer-run service
+
+# Confirmed bug: a trailing " - Remastered 2015" / " - Radio Edit" / etc.
+# suffix makes the search return 404 even though the song is indexed under
+# its base title (verified directly: "Hey Jude - Remastered 2015" -> 404,
+# "Hey Jude" -> 200). Strips everything from the first " - " onward.
+SUFFIX_PATTERN = re.compile(r"\s+-\s+.+$")
 
 _last_lyrics_call = 0.0
 
@@ -22,8 +29,7 @@ def _throttle_lyrics() -> None:
     _last_lyrics_call = time.monotonic()
 
 
-def fetch_lyrics(track_name: str, artist: str) -> str | None:
-    primary_artist = artist.split(",")[0].strip()
+def _fetch_lyrics_raw(track_name: str, primary_artist: str) -> str | None:
     url = f"{LYRICS_OVH_URL}/{quote(primary_artist)}/{quote(track_name)}"
     resp = get_with_retry(_throttle_lyrics, url)
     if resp.status_code == 404:
@@ -32,6 +38,22 @@ def fetch_lyrics(track_name: str, artist: str) -> str | None:
         return None
     resp.raise_for_status()
     return resp.json().get("lyrics")
+
+
+def fetch_lyrics(track_name: str, artist: str) -> str | None:
+    primary_artist = artist.split(",")[0].strip()
+    lyrics = _fetch_lyrics_raw(track_name, primary_artist)
+    if lyrics:
+        return lyrics
+    # Try again with a trailing " - Remastered 2015" / " - Radio Edit" /
+    # etc. suffix stripped, since that breaks the search even when the
+    # song is indexed under its base title. Only retried when a suffix
+    # actually exists, and only after the full title genuinely failed -
+    # doesn't change behavior for titles that already succeed as-is.
+    stripped = SUFFIX_PATTERN.sub("", track_name)
+    if stripped != track_name:
+        return _fetch_lyrics_raw(stripped, primary_artist)
+    return None
 
 
 def fetch_and_store_lyrics(limit: int | None = None) -> dict:
