@@ -358,15 +358,16 @@ def _fetch_musicbrainz_artist_genre(artist_name: str) -> str | None:
     runner_up_count = ordered[1].get("count", 0) if len(ordered) > 1 else 0
     # Confirmed via this session's bugs: a tag is only trustworthy when it's
     # both reasonably well-agreed-upon in absolute terms and clearly ahead
-    # of the alternatives - Tame Impala's "psychedelic rock" at 13 votes with
-    # no close second was reliable, but Octavian's genres tied at 1 vote each
-    # were not (an artist-level tag genuinely describing only some of their
-    # songs is exactly the failure mode this is guarding against - it fed a
-    # wrong genre into description generation, which then baked the mistake
-    # into the description text itself). Below either bar, this is a coin
-    # flip dressed up as data - return None (unknown) rather than a
-    # confident-looking wrong answer; only iTunes' proven per-track genre
-    # or this song's own audio/lyrics content should decide from here.
+    # of the alternatives - Octavian's genres tied at 1 vote each are the
+    # clearest failure case. A margin check does have a real coverage cost
+    # (tested and rejected two embedding-based ways to recover near-synonym
+    # cases like Tame Impala's "psychedelic rock" vs "neo-psychedelia" -
+    # both bucket-matching and direct term similarity gave unreliable
+    # results on short genre labels, e.g. "rock" vs "pop" scored more
+    # similar than the actual synonym pair). That cost is accepted:
+    # returning None loses a usable signal for a few songs, but a bad
+    # synonym detector would risk letting a genuinely wrong genre through,
+    # which is worse.
     if top_count < MUSICBRAINZ_MIN_GENRE_VOTES:
         return None
     if top_count - runner_up_count < MUSICBRAINZ_MIN_GENRE_MARGIN:
