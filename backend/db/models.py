@@ -22,6 +22,7 @@ CREATE TABLE IF NOT EXISTS songs (
     lyrics TEXT,
     description TEXT,
     embedding TEXT,
+    genre_bucket TEXT,
     fetched_at TEXT NOT NULL
 )
 """
