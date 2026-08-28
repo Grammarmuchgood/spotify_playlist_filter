@@ -40,8 +40,16 @@ def save_tracks(items: list[dict]) -> int:
             continue
         conn.execute(
             """
-            INSERT OR REPLACE INTO songs (track_id, name, artist, album, release_date, duration_ms, isrc, fetched_at)
+            INSERT INTO songs (track_id, name, artist, album, release_date, duration_ms, isrc, fetched_at)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(track_id) DO UPDATE SET
+                name = excluded.name,
+                artist = excluded.artist,
+                album = excluded.album,
+                release_date = excluded.release_date,
+                duration_ms = excluded.duration_ms,
+                isrc = excluded.isrc,
+                fetched_at = excluded.fetched_at
             """,
             (
                 track["id"],
@@ -57,11 +65,17 @@ def save_tracks(items: list[dict]) -> int:
                 now,
             ),
         )
-        # OR REPLACE: if this track_id already exists, overwrite the row
-        # instead of erroring - makes this function safely re-runnable.
-        # The ?, ?, ?... placeholders (with values passed separately, not
-        # string-formatted into the SQL) is parameterized SQL - the safe
-        # way to insert data, avoiding SQL injection.
+        # ON CONFLICT DO UPDATE (not INSERT OR REPLACE): if this track_id
+        # already exists, update only these specific metadata columns -
+        # confirmed via testing that INSERT OR REPLACE deletes the whole
+        # existing row and reinserts it, silently wiping every column not
+        # named in the statement (audio_features, lyrics, description,
+        # embedding, genre_bucket) back to NULL, even for tracks that
+        # hadn't changed at all. This preserves all that computed work
+        # when the playlist is re-fetched later - only genuinely new
+        # tracks end up with NULL downstream fields, which every other
+        # pipeline stage's "only process what's still NULL" logic already
+        # picks up correctly on its own.
         count += 1
     # SQLite doesn't persist changes to disk until commit() is called.
     conn.commit()
