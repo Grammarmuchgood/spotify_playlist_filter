@@ -3,9 +3,13 @@ from __future__ import annotations
 import json
 
 import numpy as np
+from anthropic import Anthropic
 
+from config import get_settings
 from db.database import get_connection
 from pipeline.embed import get_model
+
+RECLASSIFY_MODEL = "claude-haiku-4-5"
 
 # A small, fixed taxonomy - not a keyword-matching dictionary. The actual
 # matching between messy real genre strings ("Hip-Hop/Rap", "trap", "east
@@ -56,6 +60,54 @@ def _genre_text_for(audio_features_json: str | None, description_json: str | Non
     if description_json:
         return json.loads(description_json)["description"]
     return "unknown"
+
+
+def reclassify_with_llm(track_ids: list[str]) -> int:
+    """Targeted, cheap fix for specific known-mismatched tracks - not a full
+    corpus pass. Uses the song's own generated description (built from that
+    track's real lyrics/audio) as context, not the raw genre string, so it's
+    unaffected by upstream problems like a wrong-artist MusicBrainz match or
+    an artist-level tag that doesn't describe this specific song."""
+    from pydantic import BaseModel
+
+    class GenreClassification(BaseModel):
+        genre: str
+
+    conn = get_connection()
+    client = Anthropic(api_key=get_settings().anthropic_api_key)
+    options = ", ".join(CANONICAL_GENRES)
+
+    count = 0
+    for track_id in track_ids:
+        row = conn.execute("SELECT name, artist, description FROM songs WHERE track_id = ?", (track_id,)).fetchone()
+        if row is None or row["description"] is None:
+            continue
+        desc = json.loads(row["description"])["description"]
+
+        response = client.messages.parse(
+            model=RECLASSIFY_MODEL,
+            max_tokens=100,
+            messages=[{
+                "role": "user",
+                "content": (
+                    f"Song vibe description: {desc}\n\n"
+                    f"Pick the single best-fitting genre for this song from exactly this list: {options}\n"
+                    "Respond with only the genre name, spelled exactly as given in the list."
+                ),
+            }],
+            output_format=GenreClassification,
+        )
+        genre = response.parsed_output.genre
+        if genre not in CANONICAL_GENRES:
+            # Model didn't return an exact match from the list - skip
+            # rather than write an invalid bucket value.
+            continue
+        conn.execute("UPDATE songs SET genre_bucket = ? WHERE track_id = ?", (genre, track_id))
+        conn.commit()
+        count += 1
+
+    conn.close()
+    return count
 
 
 def assign_genre_buckets() -> int:
