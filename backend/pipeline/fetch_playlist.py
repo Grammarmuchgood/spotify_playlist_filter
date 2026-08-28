@@ -38,13 +38,19 @@ def save_tracks(items: list[dict]) -> int:
         track = entry.get("item")
         if track is None or track.get("id") is None:
             continue
+        # A handful of artist entries have a null name (a real, confirmed
+        # Spotify data gap) - filtered out here so join() doesn't crash
+        # trying to join a None, and so primary_artist below picks the
+        # first real name rather than a null one.
+        artist_names = [a["name"] for a in track["artists"] if a.get("name")]
         conn.execute(
             """
-            INSERT INTO songs (track_id, name, artist, album, release_date, duration_ms, isrc, fetched_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO songs (track_id, name, artist, primary_artist, album, release_date, duration_ms, isrc, fetched_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(track_id) DO UPDATE SET
                 name = excluded.name,
                 artist = excluded.artist,
+                primary_artist = excluded.primary_artist,
                 album = excluded.album,
                 release_date = excluded.release_date,
                 duration_ms = excluded.duration_ms,
@@ -54,10 +60,16 @@ def save_tracks(items: list[dict]) -> int:
             (
                 track["id"],
                 track["name"],
-                # A handful of artist entries have a null name (a real,
-                # confirmed Spotify data gap) - filtered out here so
-                # join() doesn't crash trying to join a None.
-                ", ".join(a["name"] for a in track["artists"] if a.get("name")),
+                ", ".join(artist_names),
+                # Taken directly from Spotify's own artist list, not by
+                # splitting the joined "artist" string above on "," - that
+                # split silently breaks for any artist whose own name
+                # contains a comma (confirmed: "Tyler, The Creator" and
+                # "Earth, Wind & Fire" both do), since there's no way to
+                # tell "a comma separating two artists" apart from "a comma
+                # inside one artist's name" once they're already joined
+                # into a single string.
+                artist_names[0] if artist_names else None,
                 track["album"]["name"],
                 track["album"].get("release_date"),
                 track["duration_ms"],

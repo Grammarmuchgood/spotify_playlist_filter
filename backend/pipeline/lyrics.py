@@ -48,8 +48,13 @@ def _fetch_lyrics_raw(track_name: str, primary_artist: str) -> str | None:
     return resp.json().get("lyrics")
 
 
-def fetch_lyrics(track_name: str, artist: str) -> str | None:
-    primary_artist = artist.split(",")[0].strip()
+def fetch_lyrics(track_name: str, primary_artist: str) -> str | None:
+    # Takes the primary artist directly (stored at fetch time from
+    # Spotify's own artist list) rather than deriving it here by splitting
+    # a joined artist string - that split silently breaks for any artist
+    # whose own name contains a comma (e.g. "Tyler, The Creator"), since
+    # there's no way to tell "a comma separating two artists" apart from
+    # "a comma inside one artist's name" after they've already been joined.
 
     # Progressively more aggressive attempts, each only added when it would
     # actually change something - stops at the first one that succeeds.
@@ -80,7 +85,7 @@ def fetch_and_store_lyrics(limit: int | None = None) -> dict:
     # Only rows never attempted - '' (set below for "confirmed no lyrics
     # found") is NOT NULL, so it's correctly skipped on future runs rather
     # than being re-queried forever.
-    query = "SELECT track_id, name, artist FROM songs WHERE lyrics IS NULL"
+    query = "SELECT track_id, name, artist, primary_artist FROM songs WHERE lyrics IS NULL"
     if limit is not None:
         query += f" LIMIT {int(limit)}"
     rows = conn.execute(query).fetchall()
@@ -88,7 +93,7 @@ def fetch_and_store_lyrics(limit: int | None = None) -> dict:
     counts = {"found": 0, "not_found": 0, "skipped_network_error": 0}
     for row in rows:
         try:
-            lyrics = fetch_lyrics(row["name"], row["artist"])
+            lyrics = fetch_lyrics(row["name"], row["primary_artist"] or row["artist"].split(",")[0].strip())
         except requests.exceptions.RequestException:
             # Retries in get_with_retry are already exhausted by this
             # point - leave lyrics as NULL (don't write anything) so a
