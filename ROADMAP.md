@@ -1,6 +1,6 @@
 ## Playlist Vibe Filter — Setup Checklist
 
-**Progress: 8 / 10 steps complete**
+**Progress: 9 / 10 steps complete**
 
 ---
 
@@ -46,9 +46,16 @@ Hit a real account-config error mid-build: personal Anthropic API keys not scope
 Full run: **647/647 generated, 0 errors.** Cost ran ~48% over the initial estimate (~$1.23 actual vs. ~$0.83 estimated) — output length (mood/tags/description) came out longer than specified, and output tokens are priced higher than input. Spot-checked both degraded cases (no lyrics, no audio match) — both correctly hedge rather than fabricate detail.
 → **push:** description generation
 
-⬜ **8. Embedding + similarity search** — NOT STARTED
-`pipeline/embed.py`, `search/similarity.py`; run against eval set for first accuracy number
-→ **push:** search working + eval results noted
+✅ **8. Embedding + similarity search** — DONE
+`pipeline/embed.py` + `search/similarity.py`: **Qwen3-Embedding-0.6B** via `sentence-transformers`, entirely local/free — chosen over paid APIs since embedding happens both once-per-song *and* once-per-query, so ongoing cost/latency mattered more here than for the one-time LLM description step. `tests/test_similarity.py` evaluates by comparing two independently-built rankings per query (hand-written eval notes vs. generated descriptions) rather than requiring new manual relevance judgments.
+Found and fixed a real bug: Qwen3-Embedding-0.6B needs its built-in asymmetric-retrieval query prompt (`prompt_name="query"`) — missing it was producing a "hub song" pattern (certain songs ranking high for nearly every unrelated query) and held measured agreement at the ~20% chance-baseline for top-10-of-50; fixing it raised agreement to 28%.
+**Real-world query testing surfaced two structural gaps**, not bugs: (1) the pipeline filters out bad matches well but under-prioritizes genre — e.g. a "chill rap" query doesn't reliably put rap tracks at the top, since genre is currently just soft context baked into the LLM's prose, never a real ranking signal; (2) no artist-specific or "songs like X" query support, since artist identity was deliberately excluded from the embedded text. **Designed but not yet built**: genre-aware ranking via Reciprocal Rank Fusion (blends a genre-relevance ranking with the vibe ranking by rank position, not raw score, so no arbitrary weight to tune) + canonical genre buckets (assigned via embedding similarity, not a hand-built keyword dictionary) + a `Qwen3-Reranker-0.6B` cross-encoder stage on the shortlist for final top-10-20 precision. Artist-priority and "songs similar to X" scoped as separate, cheaper follow-on features.
+
+**Data-quality cleanup pass**, triggered by investigating why a "chill rap" query performed poorly — found and fixed four real bugs upstream of the ranking discussion entirely, then re-validated/regenerated the full corpus:
+- **iTunes matcher accepted cover/karaoke versions**: title-similarity and artist-similarity were averaged into one score, letting a near-perfect title match (after normalization stripped the giveaway "[Instrumental Karaoke Version]" text) carry a badly-wrong artist match past the threshold. Confirmed on 2 Kanye tracks matched to an unrelated karaoke channel's audio. Fixed: artist similarity now checked independently, plus a raw-text check for explicit cover/karaoke/tribute markers before normalization can hide them. Re-validating all 557 previously-"ok" tracks under the fix found **36 silently wrong matches**, not just the 4 originally confirmed — corrected result: **521 ok / 126 no-match**.
+- **Lyrics search silently failed on three common title/artist patterns**, confirmed individually against the live API: a trailing "- Remastered 2015"/"- Radio Edit" suffix, punctuation in the title ("Ain't No Sunshine" → 404, "Aint No Sunshine" → 200), and a leading "The " in the artist name ("The Temptations" → 404, "Temptations" → 200). Fixed with progressively-more-aggressive fallback retries. Recovered **66 tracks** across two fix rounds (157 → 91 genuinely-unavailable). One remaining case (Kanye's *Vultures 1* tracks) traced to a real 2024 distributor/licensing dispute that pulled the album from platforms and re-added it under fragmented metadata — an honest external gap, not a bug.
+- Regenerated `description` + `embedding` for the **103 affected tracks** (36 corrected-match + 67 lyrics-recovered) rather than the full corpus — verified first that the corpus-wide percentile recalibration (removing 36 tracks from the "ok" pool) had **zero actual effect** on word-bucket boundaries before deciding a full ~$1.23 re-run wasn't justified.
+→ **push:** search working + eval results noted; data-quality fixes
 
 ⬜ **9. Frontend** — NOT STARTED
 Query box, results, "create playlist" button
