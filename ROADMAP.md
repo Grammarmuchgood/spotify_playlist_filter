@@ -1,6 +1,6 @@
 ## Playlist Vibe Filter — Setup Checklist
 
-**Progress: 7 / 10 steps complete**
+**Progress: 8 / 10 steps complete**
 
 ---
 
@@ -37,10 +37,13 @@ Genre backfill: iTunes' free `primaryGenreName` field covers all 557 `ok` tracks
 Along the way: both the iTunes and MusicBrainz calls hit real transient network failures during the ~40-60 min rate-limited runs (DNS resolution failure, a MusicBrainz 503, a read timeout, and a "no route to host" error - all genuine blips on this network, not simulated). Added a shared retry-with-backoff helper (`_get_with_retry`) used by both APIs, and made both backfill loops skip-and-continue on a row that still fails after retries (leaving it unmarked, not wrongly recorded as "confirmed no match") rather than letting one flaky request kill a 40-minute run.
 → **push:** audio feature extraction
 
-🔲 **7. Lyrics + LLM description** — IN PROGRESS
-`pipeline/lyrics.py` done: originally planned to use the Genius API, but discovered `genius.com` (the whole site, not just the search endpoint) returns 403 to any non-browser request from this network — genuine site-wide bot protection, not fixable with headers, and Genius's own API never returns lyrics text anyway (licensing). Switched to **lyrics.ovh**, a free no-auth API that scrapes 6 lyrics sites server-side (Genius included) and returns whichever responds first — same underlying approach, just delegated to a server that isn't blocked. `GENIUS_API_KEY` left in `.env` unused in case this is revisited later.
-Extracted the retry-with-backoff logic (previously duplicated for iTunes/MusicBrainz) into a shared `pipeline/http_utils.py` — this is the third API needing the identical pattern. Confirmed lyrics.ovh returns `404` for "no lyrics found" (a real answer, not a failure) vs. 5xx for actual transient errors, so those are handled differently: 404 stores `''` (confirmed, won't be re-queried); a 5xx/network failure after retries leaves the row `NULL` (untried, will retry next run).
-`pipeline/describe.py` (the LLM step) not yet built — prompt design finalized (see conversation), Claude Haiku 4.5 chosen for cost/task fit (~$0.83 estimated for the full batch).
+✅ **7. Lyrics + LLM description** — DONE
+`pipeline/lyrics.py`: originally planned to use the Genius API, but discovered `genius.com` (the whole site, not just the search endpoint) returns 403 to any non-browser request from this network — genuine site-wide bot protection, not fixable with headers, and Genius's own API never returns lyrics text anyway (licensing). Switched to **lyrics.ovh**, a free no-auth API that scrapes 6 lyrics sites server-side (Genius included) and returns whichever responds first — same underlying approach, just delegated to a server that isn't blocked. `GENIUS_API_KEY` left in `.env` unused in case this is revisited later.
+Extracted the retry-with-backoff logic (previously duplicated for iTunes/MusicBrainz) into a shared `pipeline/http_utils.py`. Confirmed lyrics.ovh returns `404` for "no lyrics found" (a real answer, not a failure) vs. 5xx for actual transient errors, handled differently: 404 stores `''` (confirmed, won't be re-queried); network failure after retries leaves the row `NULL` (untried, retried next run). Full run: **490/647 found lyrics, 157 confirmed none** (instrumentals / not on any of the 6 sources), 0 network failures.
+
+`pipeline/describe.py`: Claude Haiku 4.5 via `client.messages.parse()` with a Pydantic schema (`mood`, `context_tags`, `energy`, `description`) — structured output, not prompt-and-hope JSON. Combines lyrics + audio-feature words + genre + era per song; explicit rules for compound-mood cases (state conflicting audio/lyrical signals plainly rather than averaging), for missing lyrics (hedge, don't invent), and for missing audio (same). `energy` prefers the code-computed audio bucket over the LLM's own guess whenever real audio data exists — LLM only self-reports energy for the ~90 songs with no iTunes match.
+Hit a real account-config error mid-build: personal Anthropic API keys not scoped to one workspace require an `anthropic-workspace-id` header on every request. Fixed by generating a workspace-scoped key instead of adding a hardcoded header.
+Full run: **647/647 generated, 0 errors.** Cost ran ~48% over the initial estimate (~$1.23 actual vs. ~$0.83 estimated) — output length (mood/tags/description) came out longer than specified, and output tokens are priced higher than input. Spot-checked both degraded cases (no lyrics, no audio match) — both correctly hedge rather than fabricate detail.
 → **push:** description generation
 
 ⬜ **8. Embedding + similarity search** — NOT STARTED
