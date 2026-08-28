@@ -14,6 +14,7 @@ CREATE TABLE IF NOT EXISTS songs (
     track_id TEXT PRIMARY KEY,
     name TEXT NOT NULL,
     artist TEXT NOT NULL,
+    primary_artist TEXT,
     album TEXT,
     release_date TEXT,
     duration_ms INTEGER,

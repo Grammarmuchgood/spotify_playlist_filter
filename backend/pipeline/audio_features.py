@@ -41,6 +41,13 @@ MUSICBRAINZ_BASE_URL = "https://musicbrainz.org/ws/2"
 MUSICBRAINZ_USER_AGENT = "PlaylistVibeFilter/0.1 (personal project)"
 MUSICBRAINZ_MIN_INTERVAL_SECONDS = 1.0  # MusicBrainz's rate limit: 1 request/second
 MUSICBRAINZ_MIN_ARTIST_SCORE = 85  # MusicBrainz's own 0-100 relevance score for the artist-name search match
+# Same-named-artist collisions are real: searching "Cochise" returned three
+# unrelated acts (a krautrock band, the actual hip-hop producer, a
+# country-rock band) scored 100/99/97 - the top score alone isn't enough
+# to trust, since a 1-point edge is well within noise. Require the top
+# candidate to be clearly ahead of the runner-up, not just above the
+# absolute floor.
+MUSICBRAINZ_MIN_ARTIST_MARGIN = 10
 # Confidence bar for the artist-level genre tag itself (separate from the
 # artist-match score above). Calibrated against real examples seen this
 # session: Tame Impala's "psychedelic rock" at 13 votes with no close
@@ -113,10 +120,14 @@ def _similarity(a: str, b: str) -> float:
     return SequenceMatcher(None, _normalize(a), _normalize(b)).ratio()
 
 
-def find_itunes_match(track_name: str, artist: str, duration_ms: int) -> dict | None:
-    # Search on the primary artist only - "Kanye West, Pusha T" as a
-    # literal search term matches worse than "Kanye West" alone.
-    primary_artist = artist.split(",")[0].strip()
+def find_itunes_match(track_name: str, primary_artist: str, duration_ms: int) -> dict | None:
+    # Takes the primary artist directly (from Spotify's own artist list,
+    # stored at fetch time) rather than deriving it here by splitting a
+    # joined artist string - that split silently breaks for any artist
+    # whose own name contains a comma (e.g. "Tyler, The Creator", "Earth,
+    # Wind & Fire"), since there's no way to tell "a comma separating two
+    # artists" apart from "a comma inside one artist's name" after they've
+    # already been joined into one string.
     resp = get_with_retry(
         _throttle_itunes,
         ITUNES_SEARCH_URL,
@@ -220,8 +231,8 @@ def extract_features(preview_url: str) -> dict:
     }
 
 
-def process_song(track_name: str, artist: str, duration_ms: int) -> dict:
-    match = find_itunes_match(track_name, artist, duration_ms)
+def process_song(track_name: str, primary_artist: str, duration_ms: int) -> dict:
+    match = find_itunes_match(track_name, primary_artist, duration_ms)
     if match is None:
         return {"status": "no_itunes_match"}
     try:
@@ -241,7 +252,7 @@ def fetch_and_store_audio_features(limit: int | None = None) -> dict:
     conn = get_connection()
     # Only process rows that haven't been done yet - makes this safely
     # re-runnable/resumable if it's interrupted partway through.
-    query = "SELECT track_id, name, artist, duration_ms FROM songs WHERE audio_features IS NULL"
+    query = "SELECT track_id, name, artist, primary_artist, duration_ms FROM songs WHERE audio_features IS NULL"
     if limit is not None:
         query += f" LIMIT {int(limit)}"
     rows = conn.execute(query).fetchall()
@@ -249,7 +260,7 @@ def fetch_and_store_audio_features(limit: int | None = None) -> dict:
     counts = {"ok": 0, "no_itunes_match": 0, "extraction_failed": 0, "skipped_network_error": 0}
     for row in rows:
         try:
-            result = process_song(row["name"], row["artist"], row["duration_ms"])
+            result = process_song(row["name"], row["primary_artist"] or row["artist"].split(",")[0].strip(), row["duration_ms"])
         except requests.exceptions.RequestException:
             # find_itunes_match's retries (in _get_with_retry) are already
             # exhausted by this point - a real, sustained connectivity
@@ -280,7 +291,7 @@ def backfill_genre() -> int:
     """For rows processed before itunes_genre was captured: re-run just the cheap
     iTunes search (no audio download/Librosa) to fill in the missing field."""
     conn = get_connection()
-    rows = conn.execute("SELECT track_id, name, artist, duration_ms, audio_features FROM songs WHERE audio_features IS NOT NULL").fetchall()
+    rows = conn.execute("SELECT track_id, name, artist, primary_artist, duration_ms, audio_features FROM songs WHERE audio_features IS NOT NULL").fetchall()
 
     count = 0
     for row in rows:
@@ -290,7 +301,7 @@ def backfill_genre() -> int:
         if data.get("status") != "ok" or "itunes_genre" in data:
             continue
         try:
-            match = find_itunes_match(row["name"], row["artist"], row["duration_ms"])
+            match = find_itunes_match(row["name"], row["primary_artist"] or row["artist"].split(",")[0].strip(), row["duration_ms"])
         except requests.exceptions.RequestException:
             # Same reasoning as fetch_and_store_audio_features: skip this
             # row without writing itunes_genre at all, so a sustained
@@ -312,14 +323,26 @@ def _fetch_musicbrainz_artist_genre(artist_name: str) -> str | None:
     find the artist's ID (MBID) and relevance score, then a lookup call on
     that ID with genres included (the search endpoint doesn't return genres
     directly, even when asked)."""
+    # limit=5 (not 1) costs nothing extra - same single request, just asks
+    # for enough candidates back to see whether a same-named runner-up
+    # exists and how close it scored, rather than blindly trusting whichever
+    # entry happened to rank first.
     search_resp = _get_musicbrainz(
         f"{MUSICBRAINZ_BASE_URL}/artist/",
-        {"query": f'artist:"{artist_name}"', "fmt": "json", "limit": 1},
+        {"query": f'artist:"{artist_name}"', "fmt": "json", "limit": 5},
     )
     results = search_resp.json().get("artists", [])
-    # Reject a weak match rather than risk tagging the wrong same-named
-    # artist - same defensive pattern as the iTunes matching above.
-    if not results or results[0].get("score", 0) < MUSICBRAINZ_MIN_ARTIST_SCORE:
+    if not results:
+        return None
+    top_score = results[0].get("score", 0)
+    runner_up_score = results[1].get("score", 0) if len(results) > 1 else 0
+    # Reject a weak OR ambiguous match rather than risk tagging the wrong
+    # same-named artist - same defensive pattern as the iTunes matching
+    # above, extended to cover name collisions (multiple distinct artists
+    # sharing a name), not just low relevance in absolute terms.
+    if top_score < MUSICBRAINZ_MIN_ARTIST_SCORE:
+        return None
+    if top_score - runner_up_score < MUSICBRAINZ_MIN_ARTIST_MARGIN:
         return None
     mbid = results[0]["id"]
 
@@ -359,7 +382,7 @@ def backfill_genre_musicbrainz() -> int:
     an artist-level fact on MusicBrainz, and several of the unmatched
     tracks share an artist (e.g. multiple Kanye West / MF DOOM tracks)."""
     conn = get_connection()
-    rows = conn.execute("SELECT track_id, artist, audio_features FROM songs WHERE audio_features IS NOT NULL").fetchall()
+    rows = conn.execute("SELECT track_id, artist, primary_artist, audio_features FROM songs WHERE audio_features IS NOT NULL").fetchall()
 
     cache: dict[str, str | None] = {}
     count = 0
@@ -367,7 +390,10 @@ def backfill_genre_musicbrainz() -> int:
         data = json.loads(row["audio_features"])
         if data.get("status") != "no_itunes_match" or "musicbrainz_genre" in data:
             continue
-        primary_artist = row["artist"].split(",")[0].strip()
+        # Falls back to the old split only for rows somehow still missing
+        # primary_artist (shouldn't happen once fetch_playlist has been
+        # re-run) - see find_itunes_match for why the split itself is unsafe.
+        primary_artist = row["primary_artist"] or row["artist"].split(",")[0].strip()
         if primary_artist not in cache:
             try:
                 cache[primary_artist] = _fetch_musicbrainz_artist_genre(primary_artist)
