@@ -41,6 +41,16 @@ MUSICBRAINZ_BASE_URL = "https://musicbrainz.org/ws/2"
 MUSICBRAINZ_USER_AGENT = "PlaylistVibeFilter/0.1 (personal project)"
 MUSICBRAINZ_MIN_INTERVAL_SECONDS = 1.0  # MusicBrainz's rate limit: 1 request/second
 MUSICBRAINZ_MIN_ARTIST_SCORE = 85  # MusicBrainz's own 0-100 relevance score for the artist-name search match
+# Confidence bar for the artist-level genre tag itself (separate from the
+# artist-match score above). Calibrated against real examples seen this
+# session: Tame Impala's "psychedelic rock" at 13 votes with no close
+# second was reliable; Octavian's genres tied at 1 vote each were not, and
+# Tyler, The Creator's "rock" tag - genuinely his highest-count genre
+# artist-wide - still doesn't describe several individual tracks. Below
+# either bar, treat the tag as unknown rather than risk baking a
+# coin-flip genre into downstream description generation.
+MUSICBRAINZ_MIN_GENRE_VOTES = 3
+MUSICBRAINZ_MIN_GENRE_MARGIN = 2
 
 # Module-level variables - persist across function calls for as long as
 # the program runs, which is how the throttle functions remember "when
@@ -319,7 +329,25 @@ def _fetch_musicbrainz_artist_genre(artist_name: str) -> str | None:
         return None
     # Genres come with a "count" - how many MusicBrainz users tagged the
     # artist with that genre. Highest count = most agreed-upon genre.
-    top_genre = max(genres, key=lambda g: g.get("count", 0))
+    ordered = sorted(genres, key=lambda g: g.get("count", 0), reverse=True)
+    top_genre = ordered[0]
+    top_count = top_genre.get("count", 0)
+    runner_up_count = ordered[1].get("count", 0) if len(ordered) > 1 else 0
+    # Confirmed via this session's bugs: a tag is only trustworthy when it's
+    # both reasonably well-agreed-upon in absolute terms and clearly ahead
+    # of the alternatives - Tame Impala's "psychedelic rock" at 13 votes with
+    # no close second was reliable, but Octavian's genres tied at 1 vote each
+    # were not (an artist-level tag genuinely describing only some of their
+    # songs is exactly the failure mode this is guarding against - it fed a
+    # wrong genre into description generation, which then baked the mistake
+    # into the description text itself). Below either bar, this is a coin
+    # flip dressed up as data - return None (unknown) rather than a
+    # confident-looking wrong answer; only iTunes' proven per-track genre
+    # or this song's own audio/lyrics content should decide from here.
+    if top_count < MUSICBRAINZ_MIN_GENRE_VOTES:
+        return None
+    if top_count - runner_up_count < MUSICBRAINZ_MIN_GENRE_MARGIN:
+        return None
     return top_genre["name"]
 
 
