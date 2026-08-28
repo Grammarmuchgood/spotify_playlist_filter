@@ -18,6 +18,14 @@ LYRICS_MIN_INTERVAL_SECONDS = 1.0  # no published rate limit, but be a good citi
 # "Hey Jude" -> 200). Strips everything from the first " - " onward.
 SUFFIX_PATTERN = re.compile(r"\s+-\s+.+$")
 
+# Two more confirmed bugs, verified directly the same way: punctuation in
+# the title breaks the search ("Ain't No Sunshine" -> 404, "Aint No
+# Sunshine" -> 200; "N.Y. State of Mind" -> 404, "NY State of Mind" -> 200),
+# and a leading "The " in the artist name breaks it too ("The Temptations"
+# -> 404, "Temptations" -> 200).
+PUNCTUATION_PATTERN = re.compile(r"[^\w\s]")
+LEADING_THE_PATTERN = re.compile(r"^the\s+", re.IGNORECASE)
+
 _last_lyrics_call = 0.0
 
 
@@ -42,17 +50,28 @@ def _fetch_lyrics_raw(track_name: str, primary_artist: str) -> str | None:
 
 def fetch_lyrics(track_name: str, artist: str) -> str | None:
     primary_artist = artist.split(",")[0].strip()
-    lyrics = _fetch_lyrics_raw(track_name, primary_artist)
-    if lyrics:
-        return lyrics
-    # Try again with a trailing " - Remastered 2015" / " - Radio Edit" /
-    # etc. suffix stripped, since that breaks the search even when the
-    # song is indexed under its base title. Only retried when a suffix
-    # actually exists, and only after the full title genuinely failed -
-    # doesn't change behavior for titles that already succeed as-is.
-    stripped = SUFFIX_PATTERN.sub("", track_name)
-    if stripped != track_name:
-        return _fetch_lyrics_raw(stripped, primary_artist)
+
+    # Progressively more aggressive attempts, each only added when it would
+    # actually change something - stops at the first one that succeeds.
+    # Ordered from least to most aggressive so a title that already works
+    # exactly as-is never gets an unnecessary extra request.
+    title = track_name
+    candidates = [(title, primary_artist)]
+
+    no_suffix = SUFFIX_PATTERN.sub("", title)
+    if no_suffix != title:
+        candidates.append((no_suffix, primary_artist))
+        title = no_suffix
+
+    no_punctuation = PUNCTUATION_PATTERN.sub("", title)
+    no_the = LEADING_THE_PATTERN.sub("", primary_artist)
+    if no_punctuation != title or no_the != primary_artist:
+        candidates.append((no_punctuation, no_the))
+
+    for candidate_title, candidate_artist in candidates:
+        lyrics = _fetch_lyrics_raw(candidate_title, candidate_artist)
+        if lyrics:
+            return lyrics
     return None
 
 
