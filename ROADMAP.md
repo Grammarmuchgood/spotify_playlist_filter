@@ -37,8 +37,10 @@ Genre backfill: iTunes' free `primaryGenreName` field covers all 557 `ok` tracks
 Along the way: both the iTunes and MusicBrainz calls hit real transient network failures during the ~40-60 min rate-limited runs (DNS resolution failure, a MusicBrainz 503, a read timeout, and a "no route to host" error - all genuine blips on this network, not simulated). Added a shared retry-with-backoff helper (`_get_with_retry`) used by both APIs, and made both backfill loops skip-and-continue on a row that still fails after retries (leaving it unmarked, not wrongly recorded as "confirmed no match") rather than letting one flaky request kill a 40-minute run.
 → **push:** audio feature extraction
 
-⬜ **7. Lyrics + LLM description** — NOT STARTED
-`pipeline/lyrics.py`, `pipeline/describe.py`
+🔲 **7. Lyrics + LLM description** — IN PROGRESS
+`pipeline/lyrics.py` done: originally planned to use the Genius API, but discovered `genius.com` (the whole site, not just the search endpoint) returns 403 to any non-browser request from this network — genuine site-wide bot protection, not fixable with headers, and Genius's own API never returns lyrics text anyway (licensing). Switched to **lyrics.ovh**, a free no-auth API that scrapes 6 lyrics sites server-side (Genius included) and returns whichever responds first — same underlying approach, just delegated to a server that isn't blocked. `GENIUS_API_KEY` left in `.env` unused in case this is revisited later.
+Extracted the retry-with-backoff logic (previously duplicated for iTunes/MusicBrainz) into a shared `pipeline/http_utils.py` — this is the third API needing the identical pattern. Confirmed lyrics.ovh returns `404` for "no lyrics found" (a real answer, not a failure) vs. 5xx for actual transient errors, so those are handled differently: 404 stores `''` (confirmed, won't be re-queried); a 5xx/network failure after retries leaves the row `NULL` (untried, will retry next run).
+`pipeline/describe.py` (the LLM step) not yet built — prompt design finalized (see conversation), Claude Haiku 4.5 chosen for cost/task fit (~$0.83 estimated for the full batch).
 → **push:** description generation
 
 ⬜ **8. Embedding + similarity search** — NOT STARTED

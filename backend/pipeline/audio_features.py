@@ -16,6 +16,7 @@ import numpy as np
 import requests
 
 from db.database import get_connection
+from pipeline.http_utils import get_with_retry
 
 ITUNES_SEARCH_URL = "https://itunes.apple.com/search"
 ITUNES_MIN_INTERVAL_SECONDS = 3.5  # stay under the 20 req/min rate limit
@@ -62,37 +63,12 @@ def _throttle_musicbrainz() -> None:
     _last_musicbrainz_call = time.monotonic()
 
 
-def _get_with_retry(throttle_fn, url: str, params: dict, headers: dict | None = None, timeout: int = 15) -> requests.Response:
-    # Shared by both APIs: a transient failure (503, connection reset,
-    # timeout, DNS blip - all confirmed to happen in practice on this
-    # network, not hypothetical) shouldn't kill a 30-60 minute rate-limited
-    # batch run. Retries with a growing delay (1s, 2s, 4s, 8s) between
-    # attempts before finally giving up and raising.
-    last_exc = None
-    resp = None
-    for attempt in range(4):
-        throttle_fn()
-        try:
-            resp = requests.get(url, params=params, headers=headers, timeout=timeout)
-        except requests.exceptions.RequestException as exc:
-            # Raised before any response comes back at all (timeout,
-            # connection reset, DNS/routing blip) - there's no status_code
-            # to check here, so this is caught separately from a 503.
-            last_exc = exc
-            time.sleep(2**attempt)
-            continue
-        if resp.status_code != 503:
-            resp.raise_for_status()
-            return resp
-        time.sleep(2**attempt)
-    if last_exc is not None:
-        raise last_exc
+def _get_musicbrainz(url: str, params: dict) -> requests.Response:
+    resp = get_with_retry(_throttle_musicbrainz, url, params, headers={"User-Agent": MUSICBRAINZ_USER_AGENT})
+    # get_with_retry only retries 5xx - a 4xx here is a real error (bad
+    # request, not "no results"), so it's still raised, just not retried.
     resp.raise_for_status()
     return resp
-
-
-def _get_musicbrainz(url: str, params: dict) -> requests.Response:
-    return _get_with_retry(_throttle_musicbrainz, url, params, headers={"User-Agent": MUSICBRAINZ_USER_AGENT})
 
 
 def _normalize(text: str) -> str:
@@ -120,11 +96,15 @@ def find_itunes_match(track_name: str, artist: str, duration_ms: int) -> dict | 
     # Search on the primary artist only - "Kanye West, Pusha T" as a
     # literal search term matches worse than "Kanye West" alone.
     primary_artist = artist.split(",")[0].strip()
-    resp = _get_with_retry(
+    resp = get_with_retry(
         _throttle_itunes,
         ITUNES_SEARCH_URL,
         {"term": f"{primary_artist} {track_name}", "entity": "song", "limit": 5},
     )
+    # get_with_retry only retries 5xx - iTunes always returns 200 with an
+    # empty results list for "no matches," so any other status here is a
+    # real error worth raising, not retrying.
+    resp.raise_for_status()
     candidates = resp.json().get("results", [])
 
     # "Track the best candidate seen so far" loop: score every candidate,
