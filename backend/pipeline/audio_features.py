@@ -21,7 +21,18 @@ from pipeline.http_utils import get_with_retry
 ITUNES_SEARCH_URL = "https://itunes.apple.com/search"
 ITUNES_MIN_INTERVAL_SECONDS = 3.5  # stay under the 20 req/min rate limit
 DURATION_TOLERANCE_MS = 3000  # how close a candidate's length must be to Spotify's duration_ms to count as the same recording
-MIN_NAME_SIMILARITY = 0.5  # reject a match even if duration matches, if the title/artist text is too dissimilar
+MIN_NAME_SIMILARITY = 0.5  # reject a match even if duration matches, if the combined title/artist text is too dissimilar
+MIN_ARTIST_SIMILARITY = 0.5  # checked independently - a near-perfect title match must not be able to carry a bad artist match past this
+# Catalog listings for karaoke/tribute/cover versions self-identify with
+# these terms in their own raw title or artist - checked before any
+# normalization strips them out (confirmed bug: normalization was
+# stripping "(Instrumental Karaoke Version)" etc., making a fake title
+# look like a perfect match after the fact).
+COVER_VERSION_MARKERS = [
+    "karaoke", "tribute", "in the style of", "made famous by",
+    "as made famous by", "originally performed by", "instrumental version",
+    "cover version",
+]
 
 MUSICBRAINZ_BASE_URL = "https://musicbrainz.org/ws/2"
 # MusicBrainz's usage policy requires a descriptive User-Agent identifying
@@ -121,10 +132,21 @@ def find_itunes_match(track_name: str, artist: str, duration_ms: int) -> dict | 
         # an acoustic version, radio edit, or remix with the same title.
         if abs(c["trackTimeMillis"] - duration_ms) > DURATION_TOLERANCE_MS:
             continue
-        # Soft score: average of title-similarity and artist-similarity,
-        # used to pick the best among candidates that already passed the
-        # duration filter.
-        score = (_similarity(c.get("trackName", ""), track_name) + _similarity(c.get("artistName", ""), primary_artist)) / 2
+        # Reject on the raw, unnormalized text - checked before _similarity
+        # normalizes it, since normalization strips exactly the parenthetical
+        # text ("[Instrumental Karaoke Version]") that would otherwise
+        # reveal this isn't the real recording.
+        raw_text = f"{c.get('trackName', '')} {c.get('artistName', '')}".lower()
+        if any(marker in raw_text for marker in COVER_VERSION_MARKERS):
+            continue
+        title_sim = _similarity(c.get("trackName", ""), track_name)
+        artist_sim = _similarity(c.get("artistName", ""), primary_artist)
+        # Checked independently, not just as part of the averaged score -
+        # a near-perfect title match must not be able to carry a badly
+        # wrong artist (e.g. a cover act) past the threshold on its own.
+        if artist_sim < MIN_ARTIST_SIMILARITY:
+            continue
+        score = (title_sim + artist_sim) / 2
         if score > best_score:
             best_score = score
             best = c
