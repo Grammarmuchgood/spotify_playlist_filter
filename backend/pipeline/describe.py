@@ -8,7 +8,7 @@ from pydantic import BaseModel
 
 from config import get_settings
 from db.database import get_connection
-from pipeline.audio_features import compute_thresholds
+from pipeline.audio_features import _energy_era_cohort, bucket_tertile, compute_thresholds
 
 MODEL = "claude-haiku-4-5"
 
@@ -29,12 +29,9 @@ class SongDescription(BaseModel):
     description: str
 
 
-def _energy_bucket(value: float, cutoffs: tuple[float, float]) -> str:
-    lo, hi = cutoffs
-    return "low" if value < lo else "medium" if value < hi else "high"
-
-
-def _audio_context(audio_features_json: str | None, energy_thresholds: tuple[float, float]) -> tuple[str | None, str | None, str | None]:
+def _audio_context(
+    audio_features_json: str | None, energy_thresholds_by_cohort: dict[str, tuple[float, float]], year: int | None
+) -> tuple[str | None, str | None, str | None]:
     """Returns (genre, audio_description, code_computed_energy). code_computed_energy
     is None when there's no real audio data - the LLM is asked to estimate it itself
     only in that case, since a real signal-processing measurement is always preferred
@@ -45,7 +42,12 @@ def _audio_context(audio_features_json: str | None, energy_thresholds: tuple[flo
     if data.get("status") == "ok":
         genre = data.get("itunes_genre")
         audio_description = data.get("description")
-        code_energy = _energy_bucket(data["energy_rms"], energy_thresholds)
+        # Bucketed against this song's own release-era cohort, not the
+        # pooled corpus - see audio_features.compute_thresholds for why
+        # (energy_rms tracks mastering-loudness era far more than it
+        # tracks actual musical energy).
+        cutoffs = energy_thresholds_by_cohort[_energy_era_cohort(year)]
+        code_energy = bucket_tertile(data["energy_rms"], cutoffs)
         return genre, audio_description, code_energy
     return data.get("musicbrainz_genre"), None, None
 
@@ -77,7 +79,7 @@ def describe_song(client: Anthropic, track_name: str, artist: str, genre: str | 
 def fetch_and_store_descriptions(limit: int | None = None) -> dict:
     conn = get_connection()
     client = Anthropic(api_key=get_settings().anthropic_api_key)
-    thresholds = compute_thresholds(conn)["energy_rms"]
+    energy_thresholds_by_cohort = compute_thresholds(conn)["energy_rms"]
 
     query = "SELECT track_id, name, artist, release_date, audio_features, lyrics FROM songs WHERE description IS NULL"
     if limit is not None:
@@ -86,7 +88,8 @@ def fetch_and_store_descriptions(limit: int | None = None) -> dict:
 
     counts = {"ok": 0, "error": 0}
     for row in rows:
-        genre, audio_description, code_energy = _audio_context(row["audio_features"], thresholds)
+        year_int = int(row["release_date"][:4]) if row["release_date"] else None
+        genre, audio_description, code_energy = _audio_context(row["audio_features"], energy_thresholds_by_cohort, year_int)
         year = row["release_date"][:4] if row["release_date"] else None
         # '' (from lyrics.py's "confirmed no lyrics found") is treated the
         # same as never having fetched lyrics at all - both mean "nothing

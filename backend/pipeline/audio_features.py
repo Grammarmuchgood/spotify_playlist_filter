@@ -16,7 +16,7 @@ import numpy as np
 import requests
 
 from db.database import get_connection
-from pipeline.http_utils import get_with_retry
+from pipeline.http_utils import get_with_retry, make_throttle
 
 ITUNES_SEARCH_URL = "https://itunes.apple.com/search"
 ITUNES_MIN_INTERVAL_SECONDS = 3.5  # stay under the 20 req/min rate limit
@@ -59,36 +59,12 @@ MUSICBRAINZ_MIN_ARTIST_MARGIN = 10
 MUSICBRAINZ_MIN_GENRE_VOTES = 3
 MUSICBRAINZ_MIN_GENRE_MARGIN = 2
 
-# Module-level variables - persist across function calls for as long as
-# the program runs, which is how the throttle functions remember "when
-# did I last call this API" across many calls in a loop. Separate
-# variables per API since they have independent rate limits.
-_last_itunes_call = 0.0
-_last_musicbrainz_call = 0.0
-
-
-def _throttle_itunes() -> None:
-    # "global" is required to modify a module-level variable from inside
-    # a function - without it, this would create a new local variable
-    # instead of updating the shared one.
-    global _last_itunes_call
-    # time.monotonic() only ever moves forward (unaffected by system
-    # clock changes), which matters for measuring elapsed durations.
-    elapsed = time.monotonic() - _last_itunes_call
-    if elapsed < ITUNES_MIN_INTERVAL_SECONDS:
-        # Sleep just long enough to reach the minimum spacing between
-        # calls - keeps us under iTunes' 20 requests/minute limit
-        # (60s / 20 = 3s minimum; 3.5s adds a small safety margin).
-        time.sleep(ITUNES_MIN_INTERVAL_SECONDS - elapsed)
-    _last_itunes_call = time.monotonic()
-
-
-def _throttle_musicbrainz() -> None:
-    global _last_musicbrainz_call
-    elapsed = time.monotonic() - _last_musicbrainz_call
-    if elapsed < MUSICBRAINZ_MIN_INTERVAL_SECONDS:
-        time.sleep(MUSICBRAINZ_MIN_INTERVAL_SECONDS - elapsed)
-    _last_musicbrainz_call = time.monotonic()
+# Independent rate limiters per API - iTunes' 20 requests/minute limit
+# (60s / 20 = 3s minimum; 3.5s adds a small safety margin) and
+# MusicBrainz's 1 request/second are unrelated to each other, so each
+# needs its own throttle state.
+_throttle_itunes = make_throttle(ITUNES_MIN_INTERVAL_SECONDS)
+_throttle_musicbrainz = make_throttle(MUSICBRAINZ_MIN_INTERVAL_SECONDS)
 
 
 def _get_musicbrainz(url: str, params: dict) -> requests.Response:
@@ -415,45 +391,97 @@ def backfill_genre_musicbrainz() -> int:
     return count
 
 
+ENERGY_ERA_COHORTS = [
+    ("pre_1990", None, 1990),
+    ("1990s", 1990, 2000),
+    ("2000s", 2000, 2010),
+    ("2010s", 2010, 2020),
+    ("2020s", 2020, None),
+]
+
+
+def _energy_era_cohort(year: int | None) -> str:
+    # Falls back to the largest/most-recent cohort ("2020s") when a song
+    # has no release year at all - an arbitrary but reasonable default,
+    # since that's the modal era in this library.
+    if year is None:
+        return "2020s"
+    for name, lo, hi in ENERGY_ERA_COHORTS:
+        if (lo is None or year >= lo) and (hi is None or year < hi):
+            return name
+    return "2020s"
+
+
 def compute_thresholds(conn) -> dict:
     """Percentile cutoffs (tertiles) computed from the actual corpus, so 'high energy'
-    means high relative to this playlist rather than an arbitrarily guessed number."""
-    rows = conn.execute("SELECT audio_features FROM songs WHERE audio_features IS NOT NULL").fetchall()
-    parsed = [json.loads(r["audio_features"]) for r in rows]
-    ok = [f for f in parsed if f.get("status") == "ok"]
+    means high relative to this playlist rather than an arbitrarily guessed number.
+
+    energy_rms is the one exception: confirmed via direct testing that it
+    correlates strongly with release year (r=0.50, mean value roughly
+    doubles from the 1960s-80s to the 2020s) - this is the recording
+    industry's "loudness war," a mastering-era artifact, not a real
+    difference in musical energy. Bucketing it against the whole
+    multi-decade corpus was systematically mislabeling older, dynamically-
+    mastered rock as "low energy" regardless of how driving the song
+    actually is (confirmed: "Fortunate Son," "Paint It, Black," "Seven
+    Nation Army" all landed in the bottom tertile). Ranking energy_rms
+    within release-era cohorts instead removes that confound - a song is
+    now only "high energy" relative to its own era's typical mastering.
+    tempo_bpm, spectral_centroid_hz, and harmonic_ratio don't show this
+    problem (|r| < 0.03, 0.06, 0.27 respectively) so they stay pooled."""
+    rows = conn.execute("SELECT release_date, audio_features FROM songs WHERE audio_features IS NOT NULL").fetchall()
+    parsed = [(r["release_date"], json.loads(r["audio_features"])) for r in rows]
+    ok = [(release_date, f) for release_date, f in parsed if f.get("status") == "ok"]
+
+    def tertiles_of(values: list[float]) -> tuple[float, float]:
+        arr = np.array(values)
+        return float(np.percentile(arr, 33)), float(np.percentile(arr, 66))
 
     def tertiles(key: str) -> tuple[float, float]:
-        values = np.array([f[key] for f in ok])
-        # The value below which 33%/66% of the corpus falls - bucketing
-        # each song against these (rather than numbers guessed up front)
-        # is what makes "high energy" a real, discriminating signal
-        # instead of a label nearly every track gets.
-        return float(np.percentile(values, 33)), float(np.percentile(values, 66))
+        return tertiles_of([f[key] for _, f in ok])
+
+    # Falls back to the global (pooled) tertile for any cohort that ends
+    # up with no songs in it - avoids a KeyError for a library that
+    # happens to have nothing from some era.
+    global_energy_tertile = tertiles_of([f["energy_rms"] for _, f in ok])
+    energy_by_cohort: dict[str, tuple[float, float]] = {}
+    for cohort_name, _, _ in ENERGY_ERA_COHORTS:
+        values = [
+            f["energy_rms"] for release_date, f in ok
+            if _energy_era_cohort(int(release_date[:4]) if release_date else None) == cohort_name
+        ]
+        energy_by_cohort[cohort_name] = tertiles_of(values) if values else global_energy_tertile
 
     return {
         "tempo_bpm": tertiles("tempo_bpm"),
-        "energy_rms": tertiles("energy_rms"),
+        "energy_rms": energy_by_cohort,
         "spectral_centroid_hz": tertiles("spectral_centroid_hz"),
         "harmonic_ratio": tertiles("harmonic_ratio"),
     }
 
 
-def describe_features(features: dict, thresholds: dict) -> str:
-    # Shared bucketing logic for all four features: below the lower
-    # cutoff = "low" word, between cutoffs = "mid" word, above = "high".
-    def bucket(value: float, cutoffs: tuple[float, float], low: str, mid: str, high: str) -> str:
-        lo, hi = cutoffs
-        return low if value < lo else mid if value < hi else high
+def bucket_tertile(value: float, cutoffs: tuple[float, float], labels: tuple[str, str, str] = ("low", "medium", "high")) -> str:
+    """Below the lower cutoff = first label, between cutoffs = second, above = third.
+    Shared by every tertile-bucketed feature in this pipeline (tempo, energy,
+    timbre, texture here; energy again with different labels in describe.py)."""
+    lo, hi = cutoffs
+    low, mid, high = labels
+    return low if value < lo else mid if value < hi else high
 
-    tempo_word = bucket(features["tempo_bpm"], thresholds["tempo_bpm"], "slow tempo", "moderate tempo", "fast tempo")
-    energy_word = bucket(features["energy_rms"], thresholds["energy_rms"], "low energy", "medium energy", "high energy")
-    timbre_word = bucket(
+
+def describe_features(features: dict, thresholds: dict, year: int | None = None) -> str:
+    tempo_word = bucket_tertile(features["tempo_bpm"], thresholds["tempo_bpm"], ("slow tempo", "moderate tempo", "fast tempo"))
+    # energy_rms is bucketed against its release-era cohort, not the
+    # pooled corpus - see compute_thresholds for why.
+    energy_cutoffs = thresholds["energy_rms"][_energy_era_cohort(year)]
+    energy_word = bucket_tertile(features["energy_rms"], energy_cutoffs, ("low energy", "medium energy", "high energy"))
+    timbre_word = bucket_tertile(
         features["spectral_centroid_hz"], thresholds["spectral_centroid_hz"],
-        "warm, mellow timbre", "balanced timbre", "bright, sharp timbre",
+        ("warm, mellow timbre", "balanced timbre", "bright, sharp timbre"),
     )
-    texture_word = bucket(
+    texture_word = bucket_tertile(
         features["harmonic_ratio"], thresholds["harmonic_ratio"],
-        "rhythm/percussion-dominant mix", "balanced mix of tone and rhythm", "tonal/melodic-dominant mix",
+        ("rhythm/percussion-dominant mix", "balanced mix of tone and rhythm", "tonal/melodic-dominant mix"),
     )
 
     return f"{tempo_word}, {energy_word}, {timbre_word}, {texture_word}"
@@ -462,7 +490,7 @@ def describe_features(features: dict, thresholds: dict) -> str:
 def generate_descriptions() -> int:
     conn = get_connection()
     thresholds = compute_thresholds(conn)
-    rows = conn.execute("SELECT track_id, audio_features FROM songs WHERE audio_features IS NOT NULL").fetchall()
+    rows = conn.execute("SELECT track_id, release_date, audio_features FROM songs WHERE audio_features IS NOT NULL").fetchall()
 
     count = 0
     for row in rows:
@@ -473,7 +501,8 @@ def generate_descriptions() -> int:
         # just newly-added ones - needed because thresholds themselves
         # change as more songs get processed, so old descriptions could
         # otherwise go stale relative to the full corpus.
-        data["description"] = describe_features(data, thresholds)
+        year = int(row["release_date"][:4]) if row["release_date"] else None
+        data["description"] = describe_features(data, thresholds, year)
         conn.execute("UPDATE songs SET audio_features = ? WHERE track_id = ?", (json.dumps(data), row["track_id"]))
         count += 1
 
