@@ -10,6 +10,7 @@ from db.database import get_connection
 from pipeline.embed import cosine_similarity, get_model
 from pipeline.genre_buckets import CANONICAL_GENRES, detect_genre_mention, get_bucket_embeddings, match_known_phrase
 from pipeline.mood import contradicts_mood, detect_mood_preference
+from pipeline.reference_track import extract_reference_mention, resolve_reference_track
 
 RRF_K = 60  # standard IR-literature default; tunable
 SHORTLIST_SIZE = 50  # how many candidates a ranking stage hands to the reranker
@@ -204,34 +205,71 @@ def hybrid_search(query: str, top_n: int = 20, rrf_k: int = RRF_K, shortlist_siz
     in practice this fires on nearly every artist mention, since most
     artists have far fewer songs in the library than a genre bucket does;
     that's what actually produces "this artist's songs first, then
-    everything else" rather than a strict, often-too-small filter."""
+    everything else" rather than a strict, often-too-small filter.
+
+    A query containing a "songs like X" / "similar to X" construction
+    (see pipeline.reference_track.extract_reference_mention) that
+    resolves to an actual track in this library uses that track's own
+    embedding as the vibe query instead of encoding the query text -
+    "songs like In My Feelings" then means actual vibe-similarity to
+    that song, not textual similarity to the phrase "In My Feelings".
+    Genre/artist/mood detection still run, but only against the query
+    text outside the resolved reference span, so a word inside the
+    referenced title itself can't be mistaken for the user's own request.
+    If extraction or resolution fails (no such phrase, or nothing in the
+    library matches confidently), this falls back to a normal text query
+    using the full original query - resolution is a bonus when it's
+    confident, never a hard requirement."""
     songs, embeddings = _fetch_songs()
-    query_vector = get_model().encode([query], prompt_name="query")[0]
+
+    reference = extract_reference_mention(query)
+    resolved_track = resolve_reference_track(reference[0], songs) if reference else None
+    detection_text = reference[1] if resolved_track else query
+
+    if resolved_track is not None:
+        query_vector = embeddings[resolved_track["track_id"]]
+        # The reranker judges relevance by reading real vibe language
+        # jointly against each candidate's description - "In My Feelings"
+        # and "Drake" are proper nouns it has no vibe content to compare,
+        # but the resolved track's own description ("slow-burning trap
+        # with a mellow, warm vibe...") is exactly the kind of text it
+        # was built to judge. Any words outside the reference span (e.g.
+        # "chill" in "chill songs similar to Easy") ride along too, so an
+        # explicit modifier on top of the reference still counts.
+        rerank_text = f"{detection_text}. {resolved_track['description']}" if detection_text else resolved_track["description"]
+    else:
+        query_vector = get_model().encode([query], prompt_name="query")[0]
+        rerank_text = query
     bucket_scores = _bucket_scores(query_vector)
     _with_vibe_scores(songs, embeddings, query_vector)
 
-    locked_genre = detect_genre_mention(query)
+    locked_genre = detect_genre_mention(detection_text)
     known_artists = {s["primary_artist"] for s in songs if s["primary_artist"]}
-    locked_artist = detect_artist_mention(query, known_artists)
-    mood_preference = detect_mood_preference(query)
+    locked_artist = detect_artist_mention(detection_text, known_artists)
+    mood_preference = detect_mood_preference(detection_text)
     eligible = _filter_by_mood(
         _filter_by_artist(_filter_by_genre(songs, locked_genre), locked_artist),
         mood_preference,
     )
+    if resolved_track is not None:
+        # A song is never "similar to" itself.
+        eligible = [s for s in eligible if s["track_id"] != resolved_track["track_id"]]
 
     if locked_genre is None and locked_artist is None:
         shortlist = _rrf_rank(eligible, bucket_scores, rrf_k)[:shortlist_size]
-        results = _rerank(query, shortlist, match_type="rrf")[:top_n]
+        results = _rerank(rerank_text, shortlist, match_type="rrf")[:top_n]
     else:
         eligible.sort(key=lambda s: s["vibe_score"], reverse=True)
         locked_parts = [name for name, locked in (("genre", locked_genre), ("artist", locked_artist)) if locked is not None]
-        results = _rerank(query, eligible[:shortlist_size], match_type="+".join(locked_parts) + "_locked")[:top_n]
+        results = _rerank(rerank_text, eligible[:shortlist_size], match_type="+".join(locked_parts) + "_locked")[:top_n]
 
     if len(results) < top_n:
         used_ids = {r["track_id"] for r in results}
+        if resolved_track is not None:
+            used_ids.add(resolved_track["track_id"])
         other_songs = _filter_by_mood([s for s in songs if s["track_id"] not in used_ids], mood_preference)
         fallback_shortlist = _rrf_rank(other_songs, bucket_scores, rrf_k)[:shortlist_size]
-        fallback = _rerank(query, fallback_shortlist, match_type="backfill")
+        fallback = _rerank(rerank_text, fallback_shortlist, match_type="backfill")
         results += fallback[: top_n - len(results)]
 
     return results

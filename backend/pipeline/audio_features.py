@@ -75,7 +75,7 @@ def _get_musicbrainz(url: str, params: dict) -> requests.Response:
     return resp
 
 
-def _normalize(text: str) -> str:
+def normalize_title(text: str) -> str:
     text = text.lower()
     # Strip "(Live)", "[Remix]"-style suffixes; the *? makes the regex
     # non-greedy so it stops at the first closing bracket, not the last.
@@ -93,7 +93,7 @@ def _similarity(a: str, b: str) -> float:
     # strings are, based on the length of matching subsequences -
     # tolerant of small differences in spacing/capitalization/wording
     # after normalization.
-    return SequenceMatcher(None, _normalize(a), _normalize(b)).ratio()
+    return SequenceMatcher(None, normalize_title(a), normalize_title(b)).ratio()
 
 
 def find_itunes_match(track_name: str, primary_artist: str, duration_ms: int) -> dict | None:
