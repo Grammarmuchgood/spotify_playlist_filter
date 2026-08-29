@@ -72,57 +72,72 @@ GENRE_ALIASES: dict[str, list[tuple[str, ...]]] = {
     "Jerk": [("jerk",)],
 }
 
-# A genre word buried in a longer sentence only counts as a real request if
-# it sits next to a word that signals "give me music" - "rock songs"
-# clearly means the genre; "rock" alone deep in an unrelated sentence
-# might not. Confirmed necessary: "songs similar to michael jackson"
-# scored Jazz as its best-matching genre bucket by pure embedding
-# similarity (0.436, a 0.040 margin over the runner-up) despite never
-# mentioning a genre at all - a false positive an embedding-similarity
-# threshold alone can't rule out, since there's no way to distinguish
-# "this text resembles jazz" from "this text names jazz" using similarity
-# scores by themselves. Matching literal words against a small, known
-# vocabulary sidesteps that entirely.
-GENRE_MENTION_ANCHOR_WORDS = {
+# A known word/phrase buried in a longer sentence only counts as a real
+# request if it sits next to a word that signals "give me music" - "rock
+# songs" clearly means the genre; "rock" alone deep in an unrelated
+# sentence might not. Confirmed necessary: "songs similar to michael
+# jackson" scored Jazz as its best-matching genre bucket by pure
+# embedding similarity (0.436, a 0.040 margin over the runner-up) despite
+# never mentioning a genre at all - a false positive an embedding-
+# similarity threshold alone can't rule out, since there's no way to
+# distinguish "this text resembles jazz" from "this text names jazz"
+# using similarity scores by themselves. Matching literal words against a
+# small, known vocabulary sidesteps that entirely. Shared by artist
+# detection too (see search.hybrid.detect_artist_mention) - the same
+# reasoning and the same failure modes apply to "does this query name one
+# specific known artist," just against a different, larger vocabulary.
+MENTION_ANCHOR_WORDS = {
     "song", "songs", "music", "track", "tracks", "tune", "tunes",
     "vibe", "vibes", "anthem", "anthems", "banger", "bangers",
     "hit", "hits", "jam", "jams", "playlist", "genre", "genres",
 }
-GENRE_MENTION_ANCHOR_WINDOW = 2  # words to either side of a genre word that still count as "adjacent"
-GENRE_MENTION_SHORT_QUERY_WORDS = 3  # a query this short or shorter needs no anchor word at all
+MENTION_ANCHOR_WINDOW = 2  # words to either side of a mention that still count as "adjacent"
+MENTION_SHORT_QUERY_WORDS = 3  # a query this short or shorter needs no anchor word at all
+
+
+def match_known_phrase(query: str, vocabulary: dict[tuple[str, ...], str]) -> str | None:
+    """Generic literal-phrase-in-query matcher - not by semantic
+    similarity, which is the wrong tool for a question with a discrete
+    right answer ("is this specific known word/phrase present") and is
+    vulnerable to both false negatives (the target's own signal diluted
+    by other similarly-flavored words nearby, e.g. "gentle" pulling
+    toward Folk/R&B even in "gentle rock songs") and false positives (see
+    the "songs similar to michael jackson" example above).
+
+    vocabulary maps each candidate's own pre-tokenized form to whatever
+    should be returned on a match (a canonical genre name, an artist's
+    display name, ...) - callers build this from their own source (a
+    fixed alias table for genre, the corpus's actual artist list for
+    artist), this function only does the matching.
+
+    A short query ("rock", "some rock") is name enough on its own - this
+    is a music search tool, so a bare mention has nowhere else to mean. A
+    mention inside a longer sentence only counts if it sits near a
+    request word like "songs" or "music", so a real word buried in
+    unrelated prose - or a homograph like "trap"/"jerk" used in its
+    everyday, non-musical sense - doesn't fire by accident. Returns the
+    leftmost match in the query if more than one candidate matches."""
+    words = re.findall(r"[a-z0-9]+", query.lower())
+    short_query = len(words) <= MENTION_SHORT_QUERY_WORDS
+
+    for i in range(len(words)):
+        for tokens, value in vocabulary.items():
+            n = len(tokens)
+            if tuple(words[i:i + n]) != tokens:
+                continue
+            if short_query:
+                return value
+            window = words[max(0, i - MENTION_ANCHOR_WINDOW):i] + words[i + n:i + n + MENTION_ANCHOR_WINDOW]
+            if any(w in MENTION_ANCHOR_WORDS for w in window):
+                return value
+    return None
 
 
 def detect_genre_mention(query: str) -> str | None:
-    """Returns a canonical genre name if the query literally names one,
-    checked by word match against GENRE_ALIASES - not by semantic
-    similarity, which is the wrong tool for a question with a discrete
-    right answer ("is this specific word present") and is vulnerable to
-    both false negatives (a genre word's signal diluted by other
-    genre-flavored words nearby, e.g. "gentle" pulling toward Folk/R&B
-    even in "gentle rock songs") and false positives (see module
-    docstring above on "songs similar to michael jackson").
-
-    A short query ("rock", "some rock") is name enough on its own - this
-    is a music search tool, so a bare genre word has nowhere else to
-    mean. A genre word inside a longer sentence only counts if it sits
-    near a request word like "songs" or "music", so a genre-sounding word
-    buried in unrelated prose - or a homograph like "trap"/"jerk" used in
-    its everyday, non-musical sense - doesn't fire by accident."""
-    words = re.findall(r"[a-z0-9]+", query.lower())
-    short_query = len(words) <= GENRE_MENTION_SHORT_QUERY_WORDS
-
-    for i in range(len(words)):
-        for canonical, aliases in GENRE_ALIASES.items():
-            for alias in aliases:
-                n = len(alias)
-                if tuple(words[i:i + n]) != alias:
-                    continue
-                if short_query:
-                    return canonical
-                window = words[max(0, i - GENRE_MENTION_ANCHOR_WINDOW):i] + words[i + n:i + n + GENRE_MENTION_ANCHOR_WINDOW]
-                if any(w in GENRE_MENTION_ANCHOR_WORDS for w in window):
-                    return canonical
-    return None
+    """Returns a canonical genre name if the query literally names one -
+    see match_known_phrase for the matching rules."""
+    vocabulary = {alias: canonical for canonical, aliases in GENRE_ALIASES.items() for alias in aliases}
+    return match_known_phrase(query, vocabulary)
 
 
 def _genre_text_for(audio_features_json: str | None, description_json: str | None) -> str:
