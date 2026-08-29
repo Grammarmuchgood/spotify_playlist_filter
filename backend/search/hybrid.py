@@ -8,6 +8,7 @@ from sentence_transformers import CrossEncoder
 from db.database import get_connection
 from pipeline.embed import cosine_similarity, get_model
 from pipeline.genre_buckets import CANONICAL_GENRES, detect_genre_mention, get_bucket_embeddings
+from pipeline.mood import contradicts_mood, detect_mood_preference
 
 RRF_K = 60  # standard IR-literature default; tunable
 SHORTLIST_SIZE = 50  # how many candidates a ranking stage hands to the reranker
@@ -72,6 +73,18 @@ def _with_vibe_scores(songs: list[dict], embeddings: dict[str, np.ndarray], quer
     return songs
 
 
+def _filter_by_genre(songs: list[dict], genre: str | None) -> list[dict]:
+    if genre is None:
+        return songs
+    return [s for s in songs if s["genre_bucket"] == genre]
+
+
+def _filter_by_mood(songs: list[dict], mood_preference: str | None) -> list[dict]:
+    if mood_preference is None:
+        return songs
+    return [s for s in songs if not contradicts_mood(s["description"], mood_preference)]
+
+
 def _rrf_rank(songs: list[dict], bucket_scores: dict[str, float], rrf_k: int) -> list[dict]:
     """Fuses vibe similarity and genre-bucket similarity by rank position
     (Reciprocal Rank Fusion), not raw score - avoids having to calibrate
@@ -120,33 +133,45 @@ def hybrid_search(query: str, top_n: int = 20, rrf_k: int = RRF_K, shortlist_siz
     genre_buckets.detect_genre_mention) skips the blend entirely: it's
     filtered to just that genre first, so "rock songs" can't lose its
     top-20 slots to a hip-hop track that merely has a stronger
-    vibe-embedding match. If that genre doesn't have enough songs to fill
-    top_n, the remaining slots backfill from the normal cross-genre
-    ranking. Genre mention is detected by literal word match, not
-    embedding similarity - similarity was tried first and dropped: it
-    both missed real mentions (a qualifier like "gentle" pulling the
-    embedding toward Folk/R&B diluted "rock"'s own signal in "gentle rock
-    songs") and fired on non-mentions ("songs similar to michael jackson"
-    scored Jazz as its top bucket by pure chance, with no genre named at
-    all). A query's literal words are a fixed, known-in-advance fact;
-    matching against them directly sidesteps both failure modes at once."""
+    vibe-embedding match. A query that literally expresses a mood/
+    intensity preference (see pipeline.mood.detect_mood_preference)
+    additionally excludes any candidate whose own description
+    contradicts it - confirmed necessary: songs whose description
+    explicitly says "pure aggression" or "cathartic aggression" still
+    ranked in the top 20 for "calm rock songs" and "gentle rock songs",
+    because the reranker reads that language without weighting it
+    strongly enough against the query. Both checks are literal word
+    matches, not embedding similarity - similarity was tried first for
+    genre and dropped: it both missed real mentions (a qualifier like
+    "gentle" pulling the embedding toward Folk/R&B diluted "rock"'s own
+    signal in "gentle rock songs") and fired on non-mentions ("songs
+    similar to michael jackson" scored Jazz as its top bucket by pure
+    chance, with no genre named at all). A query's literal words are a
+    fixed, known-in-advance fact; matching against them directly
+    sidesteps both failure modes at once.
+
+    If genre+mood filtering leaves too few candidates to fill top_n, the
+    remaining slots backfill from the normal cross-genre ranking (still
+    respecting the mood preference, if any)."""
     songs, embeddings = _fetch_songs()
     query_vector = get_model().encode([query], prompt_name="query")[0]
     bucket_scores = _bucket_scores(query_vector)
     _with_vibe_scores(songs, embeddings, query_vector)
 
     locked_genre = detect_genre_mention(query)
-    if locked_genre is None:
-        shortlist = _rrf_rank(songs, bucket_scores, rrf_k)[:shortlist_size]
-        return _rerank(query, shortlist, match_type="rrf")[:top_n]
+    mood_preference = detect_mood_preference(query)
+    eligible = _filter_by_mood(_filter_by_genre(songs, locked_genre), mood_preference)
 
-    genre_songs = [s for s in songs if s["genre_bucket"] == locked_genre]
-    genre_songs.sort(key=lambda s: s["vibe_score"], reverse=True)
-    results = _rerank(query, genre_songs[:shortlist_size], match_type="genre_locked")[:top_n]
+    if locked_genre is None:
+        shortlist = _rrf_rank(eligible, bucket_scores, rrf_k)[:shortlist_size]
+        results = _rerank(query, shortlist, match_type="rrf")[:top_n]
+    else:
+        eligible.sort(key=lambda s: s["vibe_score"], reverse=True)
+        results = _rerank(query, eligible[:shortlist_size], match_type="genre_locked")[:top_n]
 
     if len(results) < top_n:
         used_ids = {r["track_id"] for r in results}
-        other_songs = [s for s in songs if s["track_id"] not in used_ids]
+        other_songs = _filter_by_mood([s for s in songs if s["track_id"] not in used_ids], mood_preference)
         fallback_shortlist = _rrf_rank(other_songs, bucket_scores, rrf_k)[:shortlist_size]
         fallback = _rerank(query, fallback_shortlist, match_type="backfill")
         results += fallback[: top_n - len(results)]
