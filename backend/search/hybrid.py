@@ -7,25 +7,10 @@ from sentence_transformers import CrossEncoder
 
 from db.database import get_connection
 from pipeline.embed import cosine_similarity, get_model
-from pipeline.genre_buckets import CANONICAL_GENRES, get_bucket_embeddings
+from pipeline.genre_buckets import CANONICAL_GENRES, detect_genre_mention, get_bucket_embeddings
 
 RRF_K = 60  # standard IR-literature default; tunable
 SHORTLIST_SIZE = 50  # how many candidates a ranking stage hands to the reranker
-
-# How confidently a query must name one specific genre before it's used as
-# a hard filter instead of a soft RRF signal. Calibrated against real
-# queries: genre-naming queries ("chill rap", "reggae vibes", "trap
-# music") separated cleanly from vibe-only queries ("calm relaxing
-# songs", "gym workout hype music") at a runner-up margin around 0.03 -
-# every vibe-only query tested topped out at 0.025, every genre query
-# started at 0.030. GENRE_FILTER_MIN_SCORE is a low sanity floor, not the
-# real discriminator - absolute bucket-similarity score turned out not to
-# separate the two cases on its own (a vibe-only query can score as high
-# as a genre one); the margin over the runner-up is what actually means
-# "the query names a genre" rather than "the query's wording just happens
-# to lean toward one bucket a little more than the others."
-GENRE_FILTER_MIN_SCORE = 0.35
-GENRE_FILTER_MIN_MARGIN = 0.028
 
 # The official Qwen/Qwen3-Reranker-0.6B repo isn't set up for
 # sentence-transformers' CrossEncoder out of the box - loading it left its
@@ -74,24 +59,6 @@ def _fetch_songs() -> tuple[list[dict], dict[str, np.ndarray]]:
 def _bucket_scores(query_vector: np.ndarray) -> dict[str, float]:
     bucket_vecs = get_bucket_embeddings()
     return {name: cosine_similarity(query_vector, vec) for name, vec in zip(CANONICAL_GENRES, bucket_vecs)}
-
-
-def _detect_genre_lock(bucket_scores: dict[str, float]) -> str | None:
-    """Returns a canonical genre name if the query confidently names one
-    specific genre, so hybrid_search can filter to just that genre
-    instead of treating it as one soft signal among several - otherwise
-    None. Same confidence-margin pattern used for MusicBrainz tags
-    elsewhere in this pipeline: a score floor plus a clear margin over
-    the runner-up, so a query doesn't get hard-locked to a genre it
-    merely resembles a little more than every other bucket."""
-    ordered = sorted(bucket_scores.items(), key=lambda item: item[1], reverse=True)
-    top_name, top_score = ordered[0]
-    runner_up_score = ordered[1][1] if len(ordered) > 1 else 0.0
-    if top_score < GENRE_FILTER_MIN_SCORE:
-        return None
-    if top_score - runner_up_score < GENRE_FILTER_MIN_MARGIN:
-        return None
-    return top_name
 
 
 def _to_ranks(scores: dict[str, float]) -> dict[str, int]:
@@ -149,18 +116,26 @@ def hybrid_search(query: str, top_n: int = 20, rrf_k: int = RRF_K, shortlist_siz
     (stage 1, cheap, full corpus), narrowed to a shortlist, then reordered
     by the cross-encoder reranker (stage 2, slower, shortlist only).
 
-    A query that confidently names one specific genre (see
-    _detect_genre_lock) skips the blend entirely: it's filtered to just
-    that genre first, so "rock songs" can't lose its top-20 slots to a
-    hip-hop track that merely has a stronger vibe-embedding match. If that
-    genre doesn't have enough songs to fill top_n, the remaining slots
-    backfill from the normal cross-genre ranking."""
+    A query that literally names one specific genre (see
+    genre_buckets.detect_genre_mention) skips the blend entirely: it's
+    filtered to just that genre first, so "rock songs" can't lose its
+    top-20 slots to a hip-hop track that merely has a stronger
+    vibe-embedding match. If that genre doesn't have enough songs to fill
+    top_n, the remaining slots backfill from the normal cross-genre
+    ranking. Genre mention is detected by literal word match, not
+    embedding similarity - similarity was tried first and dropped: it
+    both missed real mentions (a qualifier like "gentle" pulling the
+    embedding toward Folk/R&B diluted "rock"'s own signal in "gentle rock
+    songs") and fired on non-mentions ("songs similar to michael jackson"
+    scored Jazz as its top bucket by pure chance, with no genre named at
+    all). A query's literal words are a fixed, known-in-advance fact;
+    matching against them directly sidesteps both failure modes at once."""
     songs, embeddings = _fetch_songs()
     query_vector = get_model().encode([query], prompt_name="query")[0]
     bucket_scores = _bucket_scores(query_vector)
     _with_vibe_scores(songs, embeddings, query_vector)
 
-    locked_genre = _detect_genre_lock(bucket_scores)
+    locked_genre = detect_genre_mention(query)
     if locked_genre is None:
         shortlist = _rrf_rank(songs, bucket_scores, rrf_k)[:shortlist_size]
         return _rerank(query, shortlist, match_type="rrf")[:top_n]
