@@ -1,8 +1,28 @@
 from __future__ import annotations
 
 import time
+from typing import Callable
 
 import requests
+
+
+def make_throttle(min_interval_seconds: float) -> Callable[[], None]:
+    """Returns a rate limiter that enforces a minimum spacing between
+    calls, remembering "when did I last run" in its own closure - each
+    API gets an independent limiter this way, without a separate
+    module-level variable and near-duplicate function per API."""
+    last_call = 0.0
+
+    def throttle() -> None:
+        nonlocal last_call
+        # time.monotonic() only ever moves forward (unaffected by system
+        # clock changes), which matters for measuring elapsed durations.
+        elapsed = time.monotonic() - last_call
+        if elapsed < min_interval_seconds:
+            time.sleep(min_interval_seconds - elapsed)
+        last_call = time.monotonic()
+
+    return throttle
 
 
 def get_with_retry(throttle_fn, url: str, params: dict | None = None, headers: dict | None = None, timeout: int = 15) -> requests.Response:

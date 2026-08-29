@@ -1,13 +1,12 @@
 from __future__ import annotations
 
 import re
-import time
 from urllib.parse import quote
 
 import requests
 
 from db.database import get_connection
-from pipeline.http_utils import get_with_retry
+from pipeline.http_utils import get_with_retry, make_throttle
 
 LYRICS_OVH_URL = "https://api.lyrics.ovh/v1"
 LYRICS_MIN_INTERVAL_SECONDS = 1.0  # no published rate limit, but be a good citizen of a free volunteer-run service
@@ -26,15 +25,7 @@ SUFFIX_PATTERN = re.compile(r"\s+-\s+.+$")
 PUNCTUATION_PATTERN = re.compile(r"[^\w\s]")
 LEADING_THE_PATTERN = re.compile(r"^the\s+", re.IGNORECASE)
 
-_last_lyrics_call = 0.0
-
-
-def _throttle_lyrics() -> None:
-    global _last_lyrics_call
-    elapsed = time.monotonic() - _last_lyrics_call
-    if elapsed < LYRICS_MIN_INTERVAL_SECONDS:
-        time.sleep(LYRICS_MIN_INTERVAL_SECONDS - elapsed)
-    _last_lyrics_call = time.monotonic()
+_throttle_lyrics = make_throttle(LYRICS_MIN_INTERVAL_SECONDS)
 
 
 def _fetch_lyrics_raw(track_name: str, primary_artist: str) -> str | None:

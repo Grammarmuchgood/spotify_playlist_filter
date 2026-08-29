@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 
+import numpy as np
 from sentence_transformers import SentenceTransformer
 
 from db.database import get_connection
@@ -19,6 +20,10 @@ def get_model() -> SentenceTransformer:
     if _model is None:
         _model = SentenceTransformer(MODEL_NAME)
     return _model
+
+
+def cosine_similarity(a: np.ndarray, b: np.ndarray) -> float:
+    return float(np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b)))
 
 
 def embed_and_store() -> int:

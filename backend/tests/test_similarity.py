@@ -7,7 +7,7 @@ import os
 import numpy as np
 
 from db.database import get_connection
-from pipeline.embed import get_model
+from pipeline.embed import cosine_similarity, get_model
 
 EVAL_LABELS_PATH = os.path.join(os.path.dirname(__file__), "eval_labels.csv")
 TOP_K = 10
@@ -26,10 +26,6 @@ TEST_QUERIES = [
     "nostalgic throwback",
     "sad but upbeat",
 ]
-
-
-def _cosine_similarity(a: np.ndarray, b: np.ndarray) -> float:
-    return float(np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b)))
 
 
 def load_eval_set() -> list[dict]:
@@ -66,8 +62,8 @@ def evaluate() -> dict:
     for query in TEST_QUERIES:
         query_vector = model.encode([query], prompt_name="query")[0]
 
-        human_scores = [(names[i], _cosine_similarity(query_vector, human_vectors[i])) for i in range(len(eval_rows))]
-        pipeline_scores = [(names[i], _cosine_similarity(query_vector, pipeline_vectors[i])) for i in range(len(eval_rows))]
+        human_scores = [(names[i], cosine_similarity(query_vector, human_vectors[i])) for i in range(len(eval_rows))]
+        pipeline_scores = [(names[i], cosine_similarity(query_vector, pipeline_vectors[i])) for i in range(len(eval_rows))]
 
         human_top = {name for name, _ in sorted(human_scores, key=lambda x: x[1], reverse=True)[:TOP_K]}
         pipeline_top = {name for name, _ in sorted(pipeline_scores, key=lambda x: x[1], reverse=True)[:TOP_K]}

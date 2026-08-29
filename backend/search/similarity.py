@@ -5,11 +5,7 @@ import json
 import numpy as np
 
 from db.database import get_connection
-from pipeline.embed import get_model
-
-
-def _cosine_similarity(a: np.ndarray, b: np.ndarray) -> float:
-    return float(np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b)))
+from pipeline.embed import cosine_similarity, get_model
 
 
 def search(query: str, top_n: int = 20) -> list[dict]:
@@ -27,7 +23,7 @@ def search(query: str, top_n: int = 20) -> list[dict]:
     results = []
     for row in rows:
         song_vector = np.array(json.loads(row["embedding"]))
-        score = _cosine_similarity(query_vector, song_vector)
+        score = cosine_similarity(query_vector, song_vector)
         results.append({
             "track_id": row["track_id"],
             "name": row["name"],
