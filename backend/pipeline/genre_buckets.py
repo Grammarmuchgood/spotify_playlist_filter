@@ -7,7 +7,7 @@ from anthropic import Anthropic
 
 from config import get_settings
 from db.database import get_connection
-from pipeline.embed import get_model
+from pipeline.embed import cosine_similarity, get_model
 
 RECLASSIFY_MODEL = "claude-haiku-4-5"
 
@@ -41,10 +41,6 @@ def get_bucket_embeddings() -> np.ndarray:
     if _bucket_embeddings is None:
         _bucket_embeddings = get_model().encode(CANONICAL_GENRES)
     return _bucket_embeddings
-
-
-def _cosine_similarity(a: np.ndarray, b: np.ndarray) -> float:
-    return float(np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b)))
 
 
 def _genre_text_for(audio_features_json: str | None, description_json: str | None) -> str:
@@ -129,7 +125,7 @@ def assign_genre_buckets() -> int:
     text_vecs = model.encode(texts)
 
     for track_id, vec in zip(track_ids, text_vecs):
-        similarities = [_cosine_similarity(vec, bv) for bv in bucket_vecs]
+        similarities = [cosine_similarity(vec, bv) for bv in bucket_vecs]
         best_bucket = bucket_names[int(np.argmax(similarities))]
         conn.execute("UPDATE songs SET genre_bucket = ? WHERE track_id = ?", (best_bucket, track_id))
 
