@@ -82,6 +82,16 @@ def normalize_title(text: str) -> str:
     text = re.sub(r"\(.*?\)|\[.*?\]", "", text)
     # Strip "feat. Someone" and everything after it.
     text = re.sub(r"feat\.?.*", "", text)
+    # Strip a " - Remastered 2009" / " - Radio Edit" / " - Single Version"
+    # style trailing suffix - confirmed 39/649 songs in the real corpus
+    # have one, and without this a reference-track query using the
+    # song's real, correct title (e.g. "songs like Rock with You") never
+    # matches, because the stored title is longer than what anyone would
+    # type. Requires whitespace on both sides of the hyphen so a
+    # hyphenated word inside the real title (e.g. "Spider-Man") isn't
+    # mistaken for this boundary - only a hyphen clearly standing alone
+    # as a separator counts.
+    text = re.sub(r"\s+-\s+.*", "", text)
     # Strip remaining punctuation, keeping only letters/digits/spaces.
     text = re.sub(r"[^a-z0-9 ]", "", text)
     return text.strip()
