@@ -7,6 +7,7 @@ import numpy as np
 from sentence_transformers import CrossEncoder
 
 from db.database import get_connection
+from pipeline.artist_aliases import build_artist_aliases
 from pipeline.embed import cosine_similarity, get_model
 from pipeline.genre_buckets import CANONICAL_GENRES, detect_genre_mention, get_bucket_embeddings, match_known_phrase
 from pipeline.mood import contradicts_mood, detect_mood_preference
@@ -73,7 +74,9 @@ def _fetch_songs() -> tuple[list[dict], dict[str, np.ndarray]]:
     return songs, embeddings
 
 
-def detect_artist_mention(query: str, known_artists: set[str]) -> str | None:
+def detect_artist_mention(
+    query: str, known_artists: set[str], artist_aliases: dict[str, list[str]] | None = None
+) -> str | None:
     """Returns a primary_artist name if the query literally names one of
     the artists actually in this library, checked by the same
     anchor-word-adjacency word match as genre_buckets.detect_genre_mention
@@ -85,7 +88,14 @@ def detect_artist_mention(query: str, known_artists: set[str]) -> str | None:
     from whichever artists are actually in the corpus for this search, so
     it grows and shrinks with the playlist automatically, no maintenance
     needed. ARTIST_DETECTION_BLOCKLIST excludes the one confirmed case
-    where that automatic growth isn't safe."""
+    where that automatic growth isn't safe.
+
+    artist_aliases (see pipeline.artist_aliases.build_artist_aliases)
+    adds a few safe short forms on top of each artist's full name - e.g.
+    "Kanye" alongside "Kanye West" - confirmed real gap: "Kanye songs"
+    used to fall through to a plain vibe search with no lock at all,
+    since almost nobody types an artist's complete stored name from
+    memory."""
     vocabulary = {}
     for artist in known_artists:
         if artist in ARTIST_DETECTION_BLOCKLIST:
@@ -93,6 +103,11 @@ def detect_artist_mention(query: str, known_artists: set[str]) -> str | None:
         tokens = tuple(re.findall(r"[a-z0-9]+", artist.lower()))
         if tokens:
             vocabulary[tokens] = artist
+    for artist, aliases in (artist_aliases or {}).items():
+        if artist in ARTIST_DETECTION_BLOCKLIST:
+            continue
+        for alias in aliases:
+            vocabulary[tuple(alias.split())] = artist
     return match_known_phrase(query, vocabulary)
 
 
@@ -169,7 +184,7 @@ def _rerank(query: str, candidates: list[dict], match_type: str) -> list[dict]:
     return candidates
 
 
-def hybrid_search(query: str, top_n: int = 20, rrf_k: int = RRF_K, shortlist_size: int = SHORTLIST_SIZE) -> list[dict]:
+def hybrid_search(query: str, top_n: int = 20, rrf_k: int = RRF_K, shortlist_size: int = SHORTLIST_SIZE) -> dict:
     """Vibe-only queries are ranked by RRF-fused vibe + genre similarity
     (stage 1, cheap, full corpus), narrowed to a shortlist, then reordered
     by the cross-encoder reranker (stage 2, slower, shortlist only).
@@ -207,6 +222,31 @@ def hybrid_search(query: str, top_n: int = 20, rrf_k: int = RRF_K, shortlist_siz
     that's what actually produces "this artist's songs first, then
     everything else" rather than a strict, often-too-small filter.
 
+    When BOTH genre and artist are locked together, backfill tries
+    dropping just one of the two before giving up on both entirely -
+    confirmed necessary by actually measuring it: 94.8% of every
+    possible artist x genre pairing in this library has zero overlap
+    (e.g. Tame Impala has no Rock-bucketed songs at all, nor does Drake;
+    every one of the 20 most-prolific artists is missing at least one of
+    the six biggest genres), so "genre+artist_locked" silently producing
+    zero results and falling straight through to fully-generic backfill
+    was the default outcome for a combined query, not an edge case - and
+    every one of those 20 results carried the exact same "backfill" label
+    a legitimate "this artist just has few songs" case gets, with no way
+    to tell the two apart from the output. Artist is tried first
+    ("artist_only_backfill") before genre ("genre_only_backfill") -
+    naming a specific artist is a more deliberate, specific signal than
+    a genre modifier sitting on top of it, so "Tame Impala, just not
+    rock" honors the request more than "rock, but not by Tame Impala."
+
+    Returns a dict, not a bare list - `results` is the ranked list as
+    before, `detected` reports what genre/artist/mood/reference this
+    query was actually understood as (so a caller can tell "no exact
+    matches for Rock + Tame Impala" apart from "no genre or artist was
+    even mentioned"), and `exact_match_count` is how many of `results`
+    came from something other than a backfill tier - the number a caller
+    needs to decide whether to show that message at all.
+
     A query containing a "songs like X" / "similar to X" construction
     (see pipeline.reference_track.extract_reference_mention) that
     resolves to an actual track in this library uses that track's own
@@ -221,9 +261,11 @@ def hybrid_search(query: str, top_n: int = 20, rrf_k: int = RRF_K, shortlist_siz
     using the full original query - resolution is a bonus when it's
     confident, never a hard requirement."""
     songs, embeddings = _fetch_songs()
+    known_artists = {s["primary_artist"] for s in songs if s["primary_artist"]}
+    artist_aliases = build_artist_aliases(known_artists)
 
     reference = extract_reference_mention(query)
-    resolved_track = resolve_reference_track(reference[0], songs) if reference else None
+    resolved_track = resolve_reference_track(reference[0], songs, artist_aliases) if reference else None
     detection_text = reference[1] if resolved_track else query
 
     if resolved_track is not None:
@@ -244,8 +286,7 @@ def hybrid_search(query: str, top_n: int = 20, rrf_k: int = RRF_K, shortlist_siz
     _with_vibe_scores(songs, embeddings, query_vector)
 
     locked_genre = detect_genre_mention(detection_text)
-    known_artists = {s["primary_artist"] for s in songs if s["primary_artist"]}
-    locked_artist = detect_artist_mention(detection_text, known_artists)
+    locked_artist = detect_artist_mention(detection_text, known_artists, artist_aliases)
     mood_preference = detect_mood_preference(detection_text)
     eligible = _filter_by_mood(
         _filter_by_artist(_filter_by_genre(songs, locked_genre), locked_artist),
@@ -267,9 +308,39 @@ def hybrid_search(query: str, top_n: int = 20, rrf_k: int = RRF_K, shortlist_siz
         used_ids = {r["track_id"] for r in results}
         if resolved_track is not None:
             used_ids.add(resolved_track["track_id"])
+
+        if locked_genre is not None and locked_artist is not None:
+            for tier_pool, tier_label in (
+                (_filter_by_artist(songs, locked_artist), "artist_only_backfill"),
+                (_filter_by_genre(songs, locked_genre), "genre_only_backfill"),
+            ):
+                if len(results) >= top_n:
+                    break
+                tier_candidates = _filter_by_mood(
+                    [s for s in tier_pool if s["track_id"] not in used_ids], mood_preference
+                )
+                tier_shortlist = _rrf_rank(tier_candidates, bucket_scores, rrf_k)[:shortlist_size]
+                tier_results = _rerank(rerank_text, tier_shortlist, match_type=tier_label)
+                added = tier_results[: top_n - len(results)]
+                results += added
+                used_ids.update(r["track_id"] for r in added)
+
         other_songs = _filter_by_mood([s for s in songs if s["track_id"] not in used_ids], mood_preference)
         fallback_shortlist = _rrf_rank(other_songs, bucket_scores, rrf_k)[:shortlist_size]
         fallback = _rerank(rerank_text, fallback_shortlist, match_type="backfill")
         results += fallback[: top_n - len(results)]
 
-    return results
+    return {
+        "results": results,
+        "detected": {
+            "genre": locked_genre,
+            "artist": locked_artist,
+            "mood": mood_preference,
+            "reference_track": (
+                {"name": resolved_track["name"], "artist": resolved_track["primary_artist"]}
+                if resolved_track is not None
+                else None
+            ),
+        },
+        "exact_match_count": sum(1 for r in results if not r["match_type"].endswith("backfill")),
+    }

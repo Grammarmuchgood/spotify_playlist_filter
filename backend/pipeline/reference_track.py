@@ -42,7 +42,9 @@ def extract_reference_mention(query: str) -> tuple[str, str] | None:
     return None
 
 
-def resolve_reference_track(reference_text: str, songs: list[dict]) -> dict | None:
+def resolve_reference_track(
+    reference_text: str, songs: list[dict], artist_aliases: dict[str, list[str]] | None = None
+) -> dict | None:
     """Finds the song in `songs` most likely being referenced by free
     text like "In My Feelings by Drake" or "In My Feelings by Drake
     mainly rap" - trailing words after the actual title/artist are
@@ -57,18 +59,35 @@ def resolve_reference_track(reference_text: str, songs: list[dict]) -> dict | No
     song's own artist also appears in the reference text - otherwise a
     title like "Easy" or "Ghost" would match almost anything, the same
     coincidental-short-word risk already found and guarded against for
-    artist names. Among multiple candidates, prefers one with a
-    confirmed artist, then the longest (most specific) title match.
-    Returns None - falling back to a normal text-based vibe search -
-    rather than guess when nothing clears that bar."""
+    artist names. "Appears" includes a known short form from
+    artist_aliases (see pipeline.artist_aliases.build_artist_aliases),
+    not just the full stored name - confirmed real gap: "songs like
+    Maneater by Daryl Hall" named the artist correctly, just not by
+    their complete stored name "Daryl Hall & John Oates", and used to
+    fail to confirm for exactly that reason. Among multiple candidates,
+    prefers one with a confirmed artist, then the longest (most
+    specific) title match. Returns None - falling back to a normal
+    text-based vibe search - rather than guess when nothing clears that
+    bar."""
     normalized_ref = normalize_title(reference_text)
+    artist_aliases = artist_aliases or {}
 
     candidates = []
     for song in songs:
         normalized_name = normalize_title(song["name"])
         if not normalized_name or normalized_name not in normalized_ref:
             continue
-        artist_confirmed = bool(song["primary_artist"]) and normalize_title(song["primary_artist"]) in normalized_ref
+        # An artist name made entirely of symbols (e.g. "¥$") normalizes to
+        # "" - and "" is trivially "contained" in any string, which would
+        # make artist_confirmed always true for that artist regardless of
+        # what the query actually said. Requiring a non-empty normalized
+        # name closes that off.
+        normalized_artist = normalize_title(song["primary_artist"]) if song["primary_artist"] else ""
+        artist_confirmed = bool(normalized_artist) and normalized_artist in normalized_ref
+        if not artist_confirmed:
+            artist_confirmed = any(
+                alias in normalized_ref for alias in artist_aliases.get(song["primary_artist"], [])
+            )
         if len(normalized_name.split()) < MIN_CONFIDENT_TITLE_WORDS and not artist_confirmed:
             continue
         candidates.append((artist_confirmed, len(normalized_name), song))

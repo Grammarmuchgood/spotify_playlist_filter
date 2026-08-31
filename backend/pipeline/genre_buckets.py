@@ -115,8 +115,17 @@ def match_known_phrase(query: str, vocabulary: dict[tuple[str, ...], str]) -> st
     mention inside a longer sentence only counts if it sits near a
     request word like "songs" or "music", so a real word buried in
     unrelated prose - or a homograph like "trap"/"jerk" used in its
-    everyday, non-musical sense - doesn't fire by accident. Returns the
-    leftmost match in the query if more than one candidate matches."""
+    everyday, non-musical sense - doesn't fire by accident.
+
+    If more than one candidate matches, this does NOT return the leftmost
+    one - it returns whichever candidate is first to pass the
+    anchor-adjacency check above, which in practice means whichever match
+    sits closest to the anchor word. Confirmed via testing: "rock and
+    jazz songs" locks to Jazz, not Rock, because "jazz" sits right next
+    to "songs" while "rock" doesn't. There's no objectively correct
+    answer for an ambiguous multi-genre query, so this is left as-is -
+    just documented accurately rather than as "leftmost wins," which
+    isn't what actually happens."""
     words = re.findall(r"[a-z0-9]+", query.lower())
     short_query = len(words) <= MENTION_SHORT_QUERY_WORDS
 
