@@ -2,10 +2,30 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Playlist Vibe Filter</title>
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
+  <main>
+    <h1>Playlist Vibe Filter</h1>
+    <p class="subtitle">Search your playlist by vibe, genre, artist, or mood - or ask for songs like one you already have.</p>
+
+    <form id="search-form">
+      <input
+        id="search-input"
+        type="text"
+        placeholder="e.g. calm rock songs, chill Drake songs, songs like In My Feelings"
+        autocomplete="off"
+        autofocus
+      >
+      <button type="submit">Search</button>
+    </form>
+
+    <div id="status" class="status" hidden></div>
+    <ul id="results" class="results"></ul>
+  </main>
+
   <script src="app.js"></script>
 </body>
 </html>
