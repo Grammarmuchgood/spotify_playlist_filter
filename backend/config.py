@@ -1,6 +1,13 @@
 from functools import lru_cache
+from pathlib import Path
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+# Anchored to this file's own location (backend/config.py), not whatever
+# directory a script happens to be run from - a bare ".env" is resolved
+# relative to the CURRENT WORKING DIRECTORY, so running anything from
+# outside the project root (e.g. backend/tools/) failed to find it at all.
+_ENV_FILE = Path(__file__).resolve().parent.parent / ".env"
 
 
 # BaseSettings (not a plain BaseModel) auto-populates each field from an
@@ -12,7 +19,7 @@ class Settings(BaseSettings):
     # and in a real deployment with no code change. model_config is the
     # Pydantic v2 way of doing this; the old nested "class Config:" form
     # still works but is deprecated and slated for removal in v3.
-    model_config = SettingsConfigDict(env_file=".env")
+    model_config = SettingsConfigDict(env_file=_ENV_FILE)
 
     # No default value = required. If the matching env var is missing,
     # creating a Settings() instance raises a validation error immediately
