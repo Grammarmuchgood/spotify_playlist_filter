@@ -15,6 +15,31 @@ MIN_ALIAS_LENGTH = 3
 
 _GENRE_ALIAS_TOKENS = {alias for aliases in GENRE_ALIASES.values() for alias in aliases}
 
+# Confirmed real gap, found by actually testing derived aliases against
+# ordinary vibe queries rather than assuming the anchor-word check alone
+# protects against them: 13 of 15 tested candidates false-fired, because
+# a huge fraction of band names are literally ordinary English words
+# ("One Direction", "Fall Out Boy", "Tears For Fears", "Clean Bandit",
+# "Gym Class Heroes", ...), and "gym songs" / "one song" / "fall vibes
+# music" are exactly the kind of ordinary phrasing the anchor-adjacency
+# check exists to ALLOW, not rule out - unlike a hand-curated, closed
+# genre vocabulary, there's no positional trick that tells "Kanye songs"
+# (a real short name) apart from "gym songs" (an ordinary phrase), since
+# both have identical grammatical shape. This is a set of derived-alias
+# candidates confirmed or judged highly likely to collide with everyday
+# vibe-query language, not exhaustive - the risk is asymmetric in the
+# safe direction, though: missing a word here just means that artist
+# needs their fuller name typed (today's behavior, before aliasing
+# existed), while under-blocking one produces an actively wrong lock -
+# so this stays generous and grows reactively the same way the mood word
+# lists do whenever a real query surfaces a miss.
+COMMON_WORD_BLOCKLIST = {
+    "one", "fall", "baby", "tears", "moving", "walk", "rich", "clean", "mild", "social", "gym",
+    "young", "earth", "ice", "kid", "lady", "mother", "plain", "project", "system", "faith",
+    "glass", "electric", "men", "post", "owl", "miracle", "internet", "inner", "blue", "capital",
+    "crystal", "adventure", "wanted",
+}
+
 
 def _tokenize(name: str) -> tuple[str, ...]:
     return tuple(re.findall(r"[a-z0-9]+", name.lower()))
@@ -30,9 +55,13 @@ def build_artist_aliases(known_artists: set[str]) -> dict[str, list[str]]:
     (confirmed real case: "Fun Guns" would derive "fun", which is
     already "fun."'s whole name), and not a genre word (confirmed real
     case: "Pop Smoke" would derive "pop", already meaning the Pop
-    genre). Anything ambiguous - confirmed real case: "Michael" among
-    Michael Jackson/Bublé/McDonald - is dropped entirely rather than
-    guessed, same as the full-name matcher already does.
+    genre), and not an ordinary English word likely to appear in vibe
+    language unrelated to any artist (see COMMON_WORD_BLOCKLIST -
+    confirmed real case: "Gym Class Heroes" derives "gym", and "high
+    energy gym songs" has nothing to do with the band). Anything
+    ambiguous - confirmed real case: "Michael" among Michael Jackson/
+    Bublé/McDonald - is dropped entirely rather than guessed, same as
+    the full-name matcher already does.
 
     Deliberately does NOT derive a last-word form ("West" from "Kanye
     West") - unlike a first name, a bare surname isn't how people
@@ -66,6 +95,8 @@ def build_artist_aliases(known_artists: set[str]) -> dict[str, list[str]]:
             continue  # ambiguous between two+ artists in this corpus - don't guess
         if derived in _GENRE_ALIAS_TOKENS:
             continue  # collides with a genre word
+        if len(derived) == 1 and derived[0] in COMMON_WORD_BLOCKLIST:
+            continue  # ordinary English word, confirmed or likely to collide with vibe language
         if derived in full_name_tokens and full_name_tokens[derived] != artists:
             continue  # collides with an unrelated artist's actual full name
         artist = next(iter(artists))

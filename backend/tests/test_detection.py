@@ -108,6 +108,23 @@ ARTIST_CASES = [
     # since both go through the same match_known_phrase
     ("Drake and Kendrick Lamar songs", "Kendrick Lamar"),
     ("Kanye West or Drake songs", "Drake"),
+    # common-word derived-alias safety - confirmed real bug: "Gym Class Heroes" derives
+    # "gym", and in "high energy gym songs kanye" it beat the correct "kanye" match simply
+    # by appearing earlier in the sentence (both are equidistant from the anchor "songs").
+    # Full names stay matchable; only the risky single-word derived form is blocked.
+    ("high energy gym songs kanye", "Kanye West"),
+    ("gym class heroes songs", "Gym Class Heroes"),
+    # each of these confirmed to misfire before COMMON_WORD_BLOCKLIST existed
+    ("one song for tonight", None),
+    ("fall vibes music", None),
+    ("baby songs", None),
+    ("songs about tears", None),
+    ("moving songs that hit different", None),
+    ("walk songs for the city", None),
+    ("rich sounding songs", None),
+    ("clean songs for the car", None),
+    ("mild chill songs", None),
+    ("social gathering songs", None),
 ]
 
 

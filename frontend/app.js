@@ -27,6 +27,7 @@ function matchTypeLabel(matchType) {
     "genre+artist_locked": "genre + artist match",
     artist_only_backfill: "same artist, different genre",
     genre_only_backfill: "same genre, different artist",
+    artist_genre_backfill: "similar genre",
   };
   return labels[matchType] || matchType;
 }

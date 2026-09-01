@@ -89,6 +89,17 @@ def test_artist_lock_backfills_when_artist_has_few_songs():
     assert data["exact_match_count"] == 3
 
 
+def test_artist_only_backfill_stays_in_the_artists_own_genre():
+    # Future's 3 songs are all Hip-Hop/Rap - confirmed real gap: backfill used to rank
+    # the rest of the corpus by loose text similarity to "future songs" with zero regard
+    # for genre, pulling in Pop/Rock/Soundtrack. It should now stay in Hip-Hop/Rap first.
+    data = hybrid_search("Future songs", top_n=10)
+    backfilled = [r for r in data["results"] if r["match_type"] == "artist_genre_backfill"]
+    assert len(backfilled) == 7  # 10 - 3 real Future songs
+    assert all(r["genre_bucket"] == "Hip-Hop/Rap" for r in backfilled)
+    assert all(r["primary_artist"] != "Future" for r in backfilled)  # actually a different artist
+
+
 # ============================================================
 # TIERED BACKFILL - the composition bug: 94.8% of all artist x genre
 # pairings in this library have zero overlap, so a combined genre+artist

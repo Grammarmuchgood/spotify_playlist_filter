@@ -218,9 +218,18 @@ def hybrid_search(query: str, top_n: int = 20, rrf_k: int = RRF_K, shortlist_siz
     top_n, the remaining slots backfill from the normal cross-genre,
     cross-artist ranking (still respecting the mood preference, if any) -
     in practice this fires on nearly every artist mention, since most
-    artists have far fewer songs in the library than a genre bucket does;
-    that's what actually produces "this artist's songs first, then
-    everything else" rather than a strict, often-too-small filter.
+    artists have far fewer songs in the library than a genre bucket does.
+
+    When an artist is locked alone (no genre named), that backfill isn't
+    fully generic either: it first tries whatever genre(s) that artist's
+    own songs actually occupy ("artist_genre_backfill") before falling
+    through to a fully generic ranking - the user never stated a genre
+    preference here, but "more of the same style this artist actually
+    makes" is a much better implicit guess than ranking the entire rest
+    of the corpus by loose text similarity to their name. Confirmed
+    necessary: Future has only 3 songs, all Hip-Hop/Rap, and used to
+    backfill with whatever the phrase "future songs" happened to embed
+    near - Pop, Rock, Soundtrack - regardless of his actual genre.
 
     When BOTH genre and artist are locked together, backfill tries
     dropping just one of the two before giving up on both entirely -
@@ -310,20 +319,35 @@ def hybrid_search(query: str, top_n: int = 20, rrf_k: int = RRF_K, shortlist_siz
             used_ids.add(resolved_track["track_id"])
 
         if locked_genre is not None and locked_artist is not None:
-            for tier_pool, tier_label in (
+            backfill_tiers = [
                 (_filter_by_artist(songs, locked_artist), "artist_only_backfill"),
                 (_filter_by_genre(songs, locked_genre), "genre_only_backfill"),
-            ):
-                if len(results) >= top_n:
-                    break
-                tier_candidates = _filter_by_mood(
-                    [s for s in tier_pool if s["track_id"] not in used_ids], mood_preference
-                )
-                tier_shortlist = _rrf_rank(tier_candidates, bucket_scores, rrf_k)[:shortlist_size]
-                tier_results = _rerank(rerank_text, tier_shortlist, match_type=tier_label)
-                added = tier_results[: top_n - len(results)]
-                results += added
-                used_ids.update(r["track_id"] for r in added)
+            ]
+        elif locked_artist is not None:
+            # Artist locked alone, no genre named - the user's genre
+            # preference is unstated here, so use whatever genre(s) this
+            # artist's OWN songs actually occupy as an implicit signal,
+            # instead of leaving backfill to rank the entire rest of the
+            # corpus by loose text similarity to the artist's name. A
+            # low-song-count artist (e.g. Future, 3 songs) otherwise
+            # backfills from genres that have nothing to do with what
+            # they actually make.
+            artist_genres = {s["genre_bucket"] for s in songs if s["primary_artist"] == locked_artist}
+            backfill_tiers = [([s for s in songs if s["genre_bucket"] in artist_genres], "artist_genre_backfill")]
+        else:
+            backfill_tiers = []
+
+        for tier_pool, tier_label in backfill_tiers:
+            if len(results) >= top_n:
+                break
+            tier_candidates = _filter_by_mood(
+                [s for s in tier_pool if s["track_id"] not in used_ids], mood_preference
+            )
+            tier_shortlist = _rrf_rank(tier_candidates, bucket_scores, rrf_k)[:shortlist_size]
+            tier_results = _rerank(rerank_text, tier_shortlist, match_type=tier_label)
+            added = tier_results[: top_n - len(results)]
+            results += added
+            used_ids.update(r["track_id"] for r in added)
 
         other_songs = _filter_by_mood([s for s in songs if s["track_id"] not in used_ids], mood_preference)
         fallback_shortlist = _rrf_rank(other_songs, bucket_scores, rrf_k)[:shortlist_size]

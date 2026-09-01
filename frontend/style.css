@@ -147,7 +147,7 @@ button:disabled {
    entirely - each still honors half of what was asked, so they read as
    a step down from a full match but a step up from fully-generic
    "related", not identical to either. */
-.badge.match-artist_only_backfill, .badge.match-genre_only_backfill {
+.badge.match-artist_only_backfill, .badge.match-genre_only_backfill, .badge.match-artist_genre_backfill {
   background: transparent;
   color: var(--accent);
   border: 1px solid var(--accent);
