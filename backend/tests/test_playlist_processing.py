@@ -142,8 +142,9 @@ def test_upsert_playlist_creates_then_updates():
 
 
 # ============================================================
-# The core Step 3 requirement: a song already fully processed under one
-# playlist is reused, not reprocessed, when it shows up in another
+# The core multi-playlist requirement: a song already fully processed
+# under one playlist is reused, not reprocessed, when it shows up in
+# another
 # ============================================================
 
 def test_song_already_processed_is_reused_across_playlists(monkeypatch):
@@ -155,13 +156,14 @@ def test_song_already_processed_is_reused_across_playlists(monkeypatch):
     So this test deliberately does NOT mock the six stages away - it lets
     the real ones run, and proves the externally-sourced fields (lyrics,
     the LLM description, the embedding, the genre bucket - everything
-    that would mean a real iTunes/Genius/Anthropic/model call to redo)
-    come back byte-for-byte unchanged. audio_features' own "description"
-    sub-phrase is the one deliberate exception - generate_descriptions
-    re-derives it for every "ok" row on every run, by design, since it's
-    cheap/local and corpus-wide thresholds shift as more songs are added
-    (see that function's own docstring) - that's not a violation of
-    "reuse the expensive stuff," it's a different, intentional contract."""
+    that would mean a real iTunes/lyrics.ovh/Anthropic/model call to
+    redo) come back byte-for-byte unchanged. audio_features' own
+    "description" sub-phrase is the one deliberate exception -
+    generate_descriptions re-derives it for every "ok" row on every run,
+    by design, since it's cheap/local and corpus-wide thresholds shift as
+    more songs are added (see that function's own docstring) - that's
+    not a violation of "reuse the expensive stuff," it's a different,
+    intentional contract."""
     _insert_fully_processed_song("user_a", "shared_track", name="Shared Song")
     link_tracks_to_playlist(["shared_track"], "playlist_a", "user_a")
     upsert_playlist("playlist_a", "user_a", name="Playlist A", total_tracks=1, processing_status="complete")
@@ -268,8 +270,8 @@ def test_process_playlist_runs_stages_in_dependency_order(monkeypatch):
 def test_process_playlist_skips_local_files_and_missing_tracks(monkeypatch):
     """A playlist item with no resolvable track (a local file, or a track
     removed from Spotify's catalog since being added) must not be linked
-    or crash the run - confirmed against the real account's actual
-    playlist during this session, which genuinely has both cases."""
+    or crash the run - confirmed against a real account's actual
+    playlist, which genuinely has both cases."""
     class _FakeSpotify:
         def playlist(self, playlist_id, fields=None):
             return {"name": "Messy Playlist", "items": {"total": 3}}

@@ -106,7 +106,7 @@ def fetch_and_store_descriptions(limit: int | None = None, user_id: str | None =
             counts["error"] += 1
             continue
 
-        # Prefer the real, signal-processing-measured energy over the
+        # Prefers the real, signal-processing-measured energy over the
         # LLM's self-reported guess whenever one exists.
         final_energy = code_energy or parsed.energy
         result = {

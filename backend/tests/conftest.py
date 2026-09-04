@@ -20,10 +20,11 @@ from search.hybrid import _fetch_songs
 
 @pytest.fixture(scope="session")
 def songs() -> list[dict]:
-    """The real, current 649-track library - these tests deliberately run
+    """The real, current track library - these tests deliberately run
     against actual data rather than a mocked fixture DB, same as
-    test_similarity.py already does. Session-scoped: read-only, and
-    re-fetching per test would just slow the suite down for no benefit."""
+    test_embedding_quality_eval.py already does. Session-scoped:
+    read-only, and re-fetching per test would just slow the suite down
+    for no benefit."""
     all_songs, _ = _fetch_songs()
     return all_songs
 

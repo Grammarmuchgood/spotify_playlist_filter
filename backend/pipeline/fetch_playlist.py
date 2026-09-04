@@ -11,9 +11,10 @@ TARGET_PLAYLIST_ID = "4Jlag9nPT6xEKjNa515hUB"  # "When"
 
 def fetch_playlist_items(playlist_id: str, user_id: str | None = None) -> list[dict]:
     # Must be this specific user's own authenticated client, not the
-    # legacy default - confirmed missing before Step 3, the first time
-    # this function was ever called for anyone other than the single
-    # legacy user, where the gap couldn't have shown up at all.
+    # legacy default - this was missing before multi-user support was
+    # added, the first time this function was ever called for anyone
+    # other than the single legacy user, where the gap couldn't have
+    # shown up at all.
     sp = get_spotify_client(user_id)
     # Spotify's Feb 2026 migration renamed this endpoint from /tracks to
     # /items - sp._get() is used (instead of a spotipy named helper)
@@ -68,13 +69,13 @@ def save_tracks(items: list[dict], user_id: str | None = None) -> int:
                 track["name"],
                 ", ".join(artist_names),
                 # Taken directly from Spotify's own artist list, not by
-                # splitting the joined "artist" string above on "," - that
-                # split silently breaks for any artist whose own name
-                # contains a comma (confirmed: "Tyler, The Creator" and
-                # "Earth, Wind & Fire" both do), since there's no way to
-                # tell "a comma separating two artists" apart from "a comma
-                # inside one artist's name" once they're already joined
-                # into a single string.
+                # splitting the joined "artist" string above on "," -
+                # that split silently breaks for any artist whose own
+                # name contains a comma (confirmed: "Tyler, The Creator"
+                # and "Earth, Wind & Fire" both do), since there's no way
+                # to tell "a comma separating two artists" apart from "a
+                # comma inside one artist's name" once they're already
+                # joined into a single string.
                 artist_names[0] if artist_names else None,
                 track["album"]["name"],
                 track["album"].get("release_date"),

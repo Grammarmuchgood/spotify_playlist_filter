@@ -76,17 +76,17 @@ CREATE TABLE IF NOT EXISTS playlists (
 )
 """
 
-# The many-to-many junction between playlists and songs - see the
-# conversation that settled this design: a song's own processed data
-# (audio_features/lyrics/description/embedding/genre_bucket, all on
-# `songs`) is computed exactly once per track_id regardless of how many
-# playlists it's in; this table only ever records membership, never a
-# copy of that data. playlist_id and track_id are each a foreign key on
-# their own, but neither is unique alone (the same playlist_id repeats
-# once per song it contains; the same track_id repeats once per playlist
-# it's in) - PRIMARY KEY (playlist_id, track_id) is the pair that's
-# actually unique, and SQLite enforces that itself: inserting the same
-# pair twice is rejected, not silently duplicated.
+# The many-to-many junction between playlists and songs. A song's own
+# processed data (audio_features/lyrics/description/embedding/
+# genre_bucket, all on `songs`) is computed exactly once per track_id
+# regardless of how many playlists it's in; this table only ever records
+# membership, never a copy of that data. playlist_id and track_id are
+# each a foreign key on their own, but neither is unique alone (the same
+# playlist_id repeats once per song it contains; the same track_id
+# repeats once per playlist it's in) - PRIMARY KEY (playlist_id,
+# track_id) is the pair that's actually unique, and SQLite enforces that
+# itself: inserting the same pair twice is rejected, not silently
+# duplicated.
 CREATE_PLAYLIST_SONGS_TABLE = """
 CREATE TABLE IF NOT EXISTS playlist_songs (
     playlist_id TEXT NOT NULL REFERENCES playlists(playlist_id),

@@ -17,12 +17,12 @@ import re
 # Neither list below is exhaustive - unlike genre, there's no closed,
 # authoritative vocabulary for "words that mean calm." That's an
 # acceptable, safe kind of incomplete: a word neither list knows about
-# just means the filter doesn't fire for it, falling back to today's
-# normal ranking - the same behavior every mood word got before this file
+# just means the filter doesn't fire for it, falling back to the normal
+# ranking - the same behavior every mood word got before this file
 # existed. A missed word costs nothing extra; a wrongly-excluded song
 # would be the dangerous direction, so these stay reasonably generous but
-# not exhaustive. Grown the same way every other gap in this pipeline was
-# found this session: a real query surfaces a miss, it gets added.
+# not exhaustive - grown the same way every other gap in this pipeline
+# was found: a real query surfaces a miss, it gets added.
 GENTLE_MOOD_WORDS = {
     "calm", "calming", "gentle", "gently", "relax", "relaxed", "relaxing",
     "chill", "chilled", "mellow", "soothing", "soothe", "peaceful", "peace",

@@ -101,7 +101,7 @@ def test_artist_only_backfill_stays_in_the_artists_own_genre():
 
 
 # ============================================================
-# TIERED BACKFILL - the composition bug: 94.8% of all artist x genre
+# TIERED BACKFILL - the composition problem: 94.8% of all artist x genre
 # pairings in this library have zero overlap, so a combined genre+artist
 # request used to silently produce 100% unrelated, generically-labeled
 # backfill with no way to tell that apart from "this artist just has few

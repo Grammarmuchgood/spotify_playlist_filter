@@ -29,8 +29,8 @@ CANONICAL_GENRES = [
     # an isolated ambiguous word has no context to disambiguate its niche
     # musical sense. Adding them as their own buckets fixes this because a
     # term matching itself is a far more reliable comparison than bridging
-    # to an unrelated name - confirmed "trap" then scores 0.932 against its
-    # own bucket vs. 0.581 against the wrong one (Rock) it used to hit.
+    # to an unrelated name - "trap" then scores 0.932 against its own
+    # bucket vs. 0.581 against the wrong one (Rock) it used to hit.
     "Trap", "Drill", "Grime", "Jerk",
 ]
 
@@ -150,10 +150,10 @@ def detect_genre_mention(query: str) -> str | None:
 
 
 def _genre_text_for(audio_features_json: str | None, description_json: str | None) -> str:
-    # Prefer the real structured genre (iTunes, then MusicBrainz) when one
-    # exists. Only for the ~32 songs with neither does this fall back to
-    # the song's own generated description text - a weaker signal, but
-    # not zero signal.
+    # Prefers the real structured genre (iTunes, then MusicBrainz) when
+    # one exists. Only for the ~32 songs with neither does this fall back
+    # to the song's own generated description text - a weaker signal,
+    # but not zero signal.
     if audio_features_json:
         data = json.loads(audio_features_json)
         genre = data.get("itunes_genre") or data.get("musicbrainz_genre")

@@ -8,14 +8,21 @@ from spotipy.oauth2 import SpotifyOAuth
 
 from config import get_settings
 
-# Space-separated string of permissions we're asking the user to grant -
+# Space-separated string of permissions being requested from the user -
 # this is the exact format Spotify's API expects. Read scopes for pulling
-# playlist contents, write scopes for creating/filling the output playlist.
+# playlist contents, write scopes for creating/filling the output
+# playlist, playback scope for queueing (confirmed necessary directly:
+# calling the queue endpoint without it returns 401 "Permissions
+# missing", not a device-related error). Adding a new scope to an app
+# that users have already authorized doesn't cover their existing grant -
+# Spotify requires re-consent, so anyone already logged in needs to log
+# out and back in once for a new scope to take effect.
 SCOPES = " ".join([
     "playlist-read-private",
     "playlist-read-collaborative",
     "playlist-modify-public",
     "playlist-modify-private",
+    "user-modify-playback-state",
 ])
 
 # backend/auth/spotify_oauth.py -> parent.parent.parent is the project
@@ -78,7 +85,7 @@ def exchange_code_for_token(code: str) -> dict:
     requires USING this token to ask Spotify (see main.py's /callback,
     which does exactly that immediately after calling this).
 
-    Uses MemoryCacheHandler, not a file, on purpose - passing cache_path
+    Uses MemoryCacheHandler, not a file, on purpose - leaving cache_path
     unset would make spotipy default to a plain ".cache" file wherever
     the process happens to be running from (confirmed by reading
     spotipy's own source), the exact same cwd-dependent landmine already

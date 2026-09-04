@@ -10,8 +10,8 @@ from db.database import get_connection
 MODEL_NAME = "Qwen/Qwen3-Embedding-0.6B"
 
 # Loading the model takes ~60s (first run downloads ~1.5GB of weights,
-# cached locally after that) - a module-level singleton means it's only
-# loaded once per process, not once per function call.
+# cached locally after that) - a module-level singleton means it only
+# loads once per process, not once per function call.
 _model: SentenceTransformer | None = None
 
 
@@ -40,17 +40,18 @@ def embed_and_store(user_id: str | None = None) -> int:
     track_ids = []
     texts = []
     for row in rows:
-        # description is stored as the structured JSON blob from step 7
-        # ({"mood": ..., "context_tags": [...], "energy": ..., "description": ...}) -
-        # only the "description" field is what actually gets embedded.
+        # description is stored as the structured JSON blob from the LLM
+        # description step ({"mood": ..., "context_tags": [...], "energy":
+        # ..., "description": ...}) - only the "description" field
+        # actually gets embedded.
         data = json.loads(row["description"])
         track_ids.append(row["track_id"])
         texts.append(data["description"])
 
-    # No external rate limit here (this runs entirely on local compute), so
-    # the whole batch goes in one encode() call rather than a throttled loop -
-    # sentence-transformers batches internally far more efficiently than
-    # encoding one text at a time.
+    # No external rate limit here (this runs entirely on local compute),
+    # so the whole batch goes in one encode() call rather than a
+    # throttled loop - sentence-transformers batches internally far more
+    # efficiently than encoding one text at a time.
     model = get_model()
     vectors = model.encode(texts, show_progress_bar=True)
 

@@ -28,8 +28,8 @@ _GENRE_ALIAS_TOKENS = {alias for aliases in GENRE_ALIASES.values() for alias in 
 # both have identical grammatical shape. This is a set of derived-alias
 # candidates confirmed or judged highly likely to collide with everyday
 # vibe-query language, not exhaustive - the risk is asymmetric in the
-# safe direction, though: missing a word here just means that artist
-# needs their fuller name typed (today's behavior, before aliasing
+# safe direction though: missing a word here just means that artist
+# needs their fuller name typed (the original behavior, before aliasing
 # existed), while under-blocking one produces an actively wrong lock -
 # so this stays generous and grows reactively the same way the mood word
 # lists do whenever a real query surfaces a miss.

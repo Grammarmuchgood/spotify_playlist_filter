@@ -8,8 +8,8 @@ import requests
 
 def make_throttle(min_interval_seconds: float) -> Callable[[], None]:
     """Returns a rate limiter that enforces a minimum spacing between
-    calls, remembering "when did I last run" in its own closure - each
-    API gets an independent limiter this way, without a separate
+    calls, remembering "last call time" in its own closure - each API
+    gets an independent limiter this way, without a separate
     module-level variable and near-duplicate function per API."""
     last_call = 0.0
 
@@ -37,7 +37,7 @@ def get_with_retry(throttle_fn, url: str, params: dict | None = None, headers: d
     status (like lyrics.ovh's 404 for "no lyrics found") is a legitimate,
     meaningful response for some APIs, not a failure to retry. Only 5xx
     (server-side, likely transient) is retried here; the caller decides
-    what any other status code (2xx, 404, etc.) means for their API.
+    what any other status code (2xx, 404, etc.) means for their own API.
     """
     last_exc = None
     resp = None
@@ -47,8 +47,8 @@ def get_with_retry(throttle_fn, url: str, params: dict | None = None, headers: d
             resp = requests.get(url, params=params, headers=headers, timeout=timeout)
         except requests.exceptions.RequestException as exc:
             # Raised before any response comes back at all (timeout,
-            # connection reset, DNS/routing blip) - there's no status_code
-            # to check here, so this is caught separately from a 5xx.
+            # connection reset, DNS/routing blip) - no status_code to
+            # check here, so this is caught separately from a 5xx.
             last_exc = exc
             time.sleep(2**attempt)
             continue

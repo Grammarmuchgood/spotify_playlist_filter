@@ -1,7 +1,7 @@
 # Deferred type-hint evaluation - needed because this file uses "str |
-# None" union syntax, which the installed Python 3.9 can't evaluate at
-# runtime (that syntax needs 3.10+); this future-import defers evaluating
-# annotations so they're just treated as strings and never crash.
+# None" union syntax, which Python 3.9 can't evaluate at runtime (that
+# syntax needs 3.10+); this future-import defers evaluating annotations
+# so they're just treated as strings and never crash.
 from __future__ import annotations
 
 import json
@@ -44,17 +44,17 @@ MUSICBRAINZ_MIN_ARTIST_SCORE = 85  # MusicBrainz's own 0-100 relevance score for
 # Same-named-artist collisions are real: searching "Cochise" returned three
 # unrelated acts (a krautrock band, the actual hip-hop producer, a
 # country-rock band) scored 100/99/97 - the top score alone isn't enough
-# to trust, since a 1-point edge is well within noise. Require the top
+# to trust, since a 1-point edge is well within noise. Requires the top
 # candidate to be clearly ahead of the runner-up, not just above the
 # absolute floor.
 MUSICBRAINZ_MIN_ARTIST_MARGIN = 10
 # Confidence bar for the artist-level genre tag itself (separate from the
-# artist-match score above). Calibrated against real examples seen this
-# session: Tame Impala's "psychedelic rock" at 13 votes with no close
-# second was reliable; Octavian's genres tied at 1 vote each were not, and
-# Tyler, The Creator's "rock" tag - genuinely his highest-count genre
+# artist-match score above). Calibrated against real examples: Tame
+# Impala's "psychedelic rock" at 13 votes with no close second was
+# reliable; Octavian's genres tied at 1 vote each were not, and Tyler,
+# The Creator's "rock" tag - genuinely his highest-count genre
 # artist-wide - still doesn't describe several individual tracks. Below
-# either bar, treat the tag as unknown rather than risk baking a
+# either bar, the tag is treated as unknown rather than risking baking a
 # coin-flip genre into downstream description generation.
 MUSICBRAINZ_MIN_GENRE_VOTES = 3
 MUSICBRAINZ_MIN_GENRE_MARGIN = 2
@@ -248,13 +248,14 @@ def fetch_and_store_audio_features(limit: int | None = None, user_id: str | None
         try:
             result = process_song(row["name"], row["primary_artist"] or row["artist"].split(",")[0].strip(), row["duration_ms"])
         except requests.exceptions.RequestException:
-            # find_itunes_match's retries (in _get_with_retry) are already
+            # find_itunes_match's retries (in get_with_retry) are already
             # exhausted by this point - a real, sustained connectivity
-            # problem, not a one-off blip. Leave audio_features as NULL
-            # (don't write anything) so this row gets retried on the next
-            # run, rather than being wrongly marked "no_itunes_match" -
-            # which would mean "confirmed, permanently, no match exists"
-            # for a song we simply couldn't reach the network to check.
+            # problem, not a one-off blip. Leaves audio_features as NULL
+            # (writes nothing) so this row gets retried on the next run,
+            # rather than being wrongly marked "no_itunes_match" - which
+            # would mean "confirmed, permanently, no match exists" for a
+            # song that simply couldn't be reached over the network to
+            # check.
             counts["skipped_network_error"] += 1
             continue
         counts[result["status"]] = counts.get(result["status"], 0) + 1
@@ -322,10 +323,11 @@ def _fetch_musicbrainz_artist_genre(artist_name: str) -> str | None:
         return None
     top_score = results[0].get("score", 0)
     runner_up_score = results[1].get("score", 0) if len(results) > 1 else 0
-    # Reject a weak OR ambiguous match rather than risk tagging the wrong
-    # same-named artist - same defensive pattern as the iTunes matching
-    # above, extended to cover name collisions (multiple distinct artists
-    # sharing a name), not just low relevance in absolute terms.
+    # Rejects a weak OR ambiguous match rather than risking tagging the
+    # wrong same-named artist - same defensive pattern as the iTunes
+    # matching above, extended to cover name collisions (multiple
+    # distinct artists sharing a name), not just low relevance in
+    # absolute terms.
     if top_score < MUSICBRAINZ_MIN_ARTIST_SCORE:
         return None
     if top_score - runner_up_score < MUSICBRAINZ_MIN_ARTIST_MARGIN:
@@ -342,18 +344,17 @@ def _fetch_musicbrainz_artist_genre(artist_name: str) -> str | None:
     top_genre = ordered[0]
     top_count = top_genre.get("count", 0)
     runner_up_count = ordered[1].get("count", 0) if len(ordered) > 1 else 0
-    # Confirmed via this session's bugs: a tag is only trustworthy when it's
-    # both reasonably well-agreed-upon in absolute terms and clearly ahead
-    # of the alternatives - Octavian's genres tied at 1 vote each are the
-    # clearest failure case. A margin check does have a real coverage cost
-    # (tested and rejected two embedding-based ways to recover near-synonym
-    # cases like Tame Impala's "psychedelic rock" vs "neo-psychedelia" -
-    # both bucket-matching and direct term similarity gave unreliable
-    # results on short genre labels, e.g. "rock" vs "pop" scored more
-    # similar than the actual synonym pair). That cost is accepted:
-    # returning None loses a usable signal for a few songs, but a bad
-    # synonym detector would risk letting a genuinely wrong genre through,
-    # which is worse.
+    # A tag is only trustworthy when it's both reasonably well-agreed-upon
+    # in absolute terms and clearly ahead of the alternatives - Octavian's
+    # genres tied at 1 vote each are the clearest failure case. A margin
+    # check does have a real coverage cost (two embedding-based ways to
+    # recover near-synonym cases like Tame Impala's "psychedelic rock" vs
+    # "neo-psychedelia" were tried and rejected - both bucket-matching and
+    # direct term similarity gave unreliable results on short genre
+    # labels, e.g. "rock" vs "pop" scored more similar than the actual
+    # synonym pair). That cost is accepted: returning None loses a usable
+    # signal for a few songs, but a bad synonym detector would risk
+    # letting a genuinely wrong genre through, which is worse.
     if top_count < MUSICBRAINZ_MIN_GENRE_VOTES:
         return None
     if top_count - runner_up_count < MUSICBRAINZ_MIN_GENRE_MARGIN:

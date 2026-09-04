@@ -48,7 +48,7 @@ def test_per_user_token_cache_path_is_isolated():
 
 
 # ============================================================
-# The actual security property Step 2 exists to deliver: no session,
+# The actual security property this file exists to check: no session,
 # no data - not even accidentally falling back to a default.
 # ============================================================
 

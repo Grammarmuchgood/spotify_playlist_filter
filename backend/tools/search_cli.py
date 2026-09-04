@@ -5,8 +5,8 @@ Run from the project root:
 
 Loads the embedding/reranker models once at startup (~15-30s), then
 loops - every query after that only pays the real per-query cost
-(~3-5s, almost entirely the reranker), so you can fire off many test
-queries back to back without waiting for a fresh model load each time.
+(~3-5s, almost entirely the reranker), so many test queries can be
+fired off back to back without waiting for a fresh model load each time.
 
 Commands:
   <any text>   run it as a search query
@@ -41,7 +41,7 @@ def print_results(data: dict, top_n: int) -> None:
 
 def main() -> None:
     print("Loading models (one-time, ~15-30s)...")
-    hybrid_search("warm up", top_n=1)  # pays the model-load cost now, not on your first real query
+    hybrid_search("warm up", top_n=1)  # pays the model-load cost now, not on the first real query
     print("Ready. Type a query and press enter. '/top N' to change result count. 'quit' to exit.\n")
 
     top_n = 10

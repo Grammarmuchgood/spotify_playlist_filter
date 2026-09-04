@@ -1,9 +1,11 @@
+import json
 from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Request
 from fastapi.responses import RedirectResponse
 from fastapi.staticfiles import StaticFiles
+from spotipy import SpotifyException
 from starlette.middleware.sessions import SessionMiddleware
 
 from auth.spotify_oauth import (
@@ -17,7 +19,10 @@ from config import get_settings
 from db.database import get_connection
 from db.models import init_db, upsert_user_meta
 from pipeline.embed import get_model
+from pipeline.fetch_playlist import fetch_playlist_items
 from pipeline.genre_buckets import get_bucket_embeddings
+from playlist.create_playlist import add_tracks_to_playlist, create_playlist
+from playlist.queue import queue_track
 from pipeline.process_playlist import TERMINAL_STATUSES, process_playlist
 from search.hybrid import get_reranker, hybrid_search
 
@@ -41,9 +46,7 @@ async def lifespan(app: FastAPI):
 
 # The actual web server application - every route below attaches to this.
 # lifespan= is the current FastAPI way of running startup/shutdown code -
-# @app.on_event("startup") (the old way) still works but is deprecated,
-# and this is the first test in the whole suite to actually import and
-# exercise this app object, which is why the warning only surfaced now.
+# @app.on_event("startup") (the old way) still works but is deprecated.
 app = FastAPI(lifespan=lifespan)
 
 # Runs on every request, not just these routes - reads the incoming
@@ -60,7 +63,15 @@ app.add_middleware(
     same_site="lax",
 )
 
-FRONTEND_DIR = Path(__file__).resolve().parent.parent / "frontend"
+# The React app's BUILT output (npm run build's dist/), not its source -
+# this only gets served in production. In local dev, the browser only
+# ever talks to Vite's dev server (127.0.0.1:5173), which proxies API
+# paths back to this backend - this mount is never actually reached
+# during dev, only once there's no separate dev server anymore. The old
+# frontend/ (vanilla JS) directory is no longer mounted at all - the
+# React app is now the real, complete frontend it was built to replace,
+# not left running alongside it.
+FRONTEND_DIR = Path(__file__).resolve().parent.parent / "frontend-react" / "dist"
 
 
 def get_current_user_id(request: Request) -> str:
@@ -135,7 +146,17 @@ def callback(request: Request):
     # SessionMiddleware's setup at the top of this file.
     request.session["user_id"] = user_id
 
-    return RedirectResponse("/")
+    # NOT a relative "/" - Spotify redirects the browser here directly,
+    # to whatever host:port SPOTIFY_REDIRECT_URI says, completely
+    # independent of which port a frontend dev server happens to be
+    # running on (this request never passes through Vite's dev proxy at
+    # all, unlike every other route in this file). A relative redirect
+    # would strand the browser on this backend's own static files
+    # instead of sending it back to the frontend actually being used.
+    # frontend_url defaults to "/" for production, where the built
+    # frontend and this backend share one origin and there's nothing to
+    # redirect across.
+    return RedirectResponse(get_settings().frontend_url)
 
 
 @app.get("/logout")
@@ -239,8 +260,120 @@ def playlist_status(playlist_id: str, user_id: str = Depends(get_current_user_id
     return dict(row)
 
 
+@app.get("/playlists/{playlist_id}/songs")
+def list_playlist_songs(playlist_id: str, user_id: str = Depends(get_current_user_id)):
+    # Browsable regardless of processing state - a playlist that's never
+    # been touched by the pipeline has zero rows in playlist_songs at all,
+    # so there's nothing local to read yet. In that case, fall back to
+    # asking Spotify directly for the same raw track list the pipeline
+    # itself would fetch - same function process_playlist uses, called
+    # here purely to read, not to start any processing.
+    conn = get_connection(user_id)
+    rows = conn.execute(
+        """
+        SELECT songs.track_id, songs.name, songs.artist, songs.genre_bucket, songs.description
+        FROM songs
+        JOIN playlist_songs ON songs.track_id = playlist_songs.track_id
+        WHERE playlist_songs.playlist_id = ?
+        ORDER BY songs.name COLLATE NOCASE
+        """,
+        (playlist_id,),
+    ).fetchall()
+    conn.close()
+
+    if rows:
+        songs = [
+            {
+                "track_id": row["track_id"],
+                "name": row["name"],
+                "artist": row["artist"],
+                "genre_bucket": row["genre_bucket"],
+                # description is stored as a JSON blob ({"description":
+                # ..., "mood": ..., ...}, see pipeline/describe.py) - NULL
+                # for a song this playlist has linked but the pipeline
+                # hasn't reached yet (e.g. mid-run), not just for a
+                # playlist that's never been processed at all.
+                "description": json.loads(row["description"])["description"] if row["description"] else None,
+            }
+            for row in rows
+        ]
+        return {"songs": songs}
+
+    try:
+        items = fetch_playlist_items(playlist_id, user_id)
+    except SpotifyException as exc:
+        # Confirmed real, not a bug in this endpoint: reproduced the same
+        # 403 directly against spotipy's own official playlist_items()
+        # helper, unmodified, for a specific real playlist (a label-owned
+        # public playlist, "ATMA Classique") - Spotify itself blocks
+        # third-party item-level access to some playlists' contents even
+        # though the playlist's own metadata (name, owner, public status)
+        # is readable. process_playlist already handles this gracefully
+        # via its own broad try/except (marks the playlist "failed") -
+        # this endpoint had no equivalent handling at all before this,
+        # so the same real failure surfaced as an unhandled 500 instead
+        # of a clear answer.
+        if exc.http_status == 403:
+            raise HTTPException(
+                status_code=403,
+                detail="Spotify won't allow this playlist's songs to be read via the API, even though it's visible in your library.",
+            ) from exc
+        raise HTTPException(status_code=502, detail="Spotify's API returned an error fetching this playlist.") from exc
+
+    songs = []
+    for entry in items:
+        track = entry.get("item")
+        if track is None or track.get("id") is None:
+            continue
+        artist_names = [a["name"] for a in track["artists"] if a.get("name")]
+        songs.append({
+            "track_id": track["id"],
+            "name": track["name"],
+            "artist": ", ".join(artist_names),
+            "genre_bucket": None,
+            "description": None,
+        })
+    return {"songs": songs}
+
+
+@app.post("/queue")
+def add_to_queue(track_id: str, user_id: str = Depends(get_current_user_id)):
+    # Deliberately doesn't catch failures into a "soft" success here - if
+    # this returns anything but 200, the frontend is meant to actually
+    # try the fallback (POST /add-to-playlist), not silently swallow the
+    # problem. The most common real failure, confirmed directly while
+    # building this: a 404 with reason NO_ACTIVE_DEVICE - queueing needs
+    # a live Spotify Connect session somewhere (phone, desktop app, web
+    # player), not just this app being open.
+    try:
+        queue_track(f"spotify:track:{track_id}", user_id)
+    except SpotifyException as exc:
+        raise HTTPException(status_code=503, detail="Couldn't queue - nothing seems to be actively playing right now.") from exc
+    return {"queued": True}
+
+
+@app.post("/add-to-playlist")
+def add_to_playlist(track_id: str, playlist_id: str, user_id: str = Depends(get_current_user_id)):
+    # The fallback path when queueing doesn't work, revised: rather than
+    # one fixed auto-created playlist, the frontend shows a real picker
+    # (backed by the same GET /playlists this app already has) and the
+    # user chooses which of their own existing playlists to use.
+    add_tracks_to_playlist(playlist_id, [f"spotify:track:{track_id}"], user_id=user_id)
+    return {"status": "added"}
+
+
+@app.post("/playlists/new")
+def create_new_playlist(name: str, track_id: str, user_id: str = Depends(get_current_user_id)):
+    # The other half of the picker: create a brand new playlist on the
+    # spot and add this song to it in one action, rather than making the
+    # user create it on Spotify first and come back.
+    playlist = create_playlist(name, user_id=user_id)
+    add_tracks_to_playlist(playlist["id"], [f"spotify:track:{track_id}"], user_id=user_id)
+    return {"id": playlist["id"], "name": playlist["name"]}
+
+
 # Mounted last and deliberately last - Starlette matches routes in
 # registration order, and this mount is a catch-all for "/" that would
 # otherwise shadow every route defined above it. html=True serves
-# frontend/index.html for "/" itself, not just exact file paths.
+# FRONTEND_DIR/index.html for "/" itself, not just exact file paths.
 app.mount("/", StaticFiles(directory=str(FRONTEND_DIR), html=True), name="frontend")

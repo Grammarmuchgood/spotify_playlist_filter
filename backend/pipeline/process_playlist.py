@@ -44,12 +44,13 @@ def _completed_count(user_id: str | None, playlist_id: str, column: str) -> int:
 
 def process_playlist(user_id: str, playlist_id: str) -> None:
     """The orchestration entry point that didn't exist anywhere before
-    Step 3 - none of the six stage functions below call each other, and
-    scripts/run_pipeline.py (the obvious place for this) has been empty
-    since the project's first commit. Runs as a FastAPI BackgroundTask
-    (see main.py's POST /playlists/{id}/process) - not awaited by the
-    request that triggers it, so a real playlist genuinely taking several
-    minutes never blocks that request.
+    multi-user playlist support was added - none of the six stage
+    functions below call each other, and scripts/run_pipeline.py (the
+    obvious place for this) was empty from the project's first commit
+    until then. Runs as a FastAPI BackgroundTask (see main.py's POST
+    /playlists/{id}/process) - not awaited by the request that triggers
+    it, so a real playlist genuinely taking several minutes never blocks
+    that request.
 
     Stage order is a real dependency chain, confirmed by reading each
     stage's source before writing this, not assumed from the function
@@ -85,7 +86,7 @@ def process_playlist(user_id: str, playlist_id: str) -> None:
     # Spotify's Feb 2026 migration (see fetch_playlist_items's own
     # comment on the /tracks -> /items endpoint rename) renamed this
     # metadata field too - confirmed directly against the live API
-    # before writing this, not assumed from the old shape: playlist
+    # before relying on it, not assumed from the old shape: playlist
     # objects now nest track count under "items.total", not "tracks.total".
     playlist_meta = sp.playlist(playlist_id, fields="name,items.total")
 

@@ -34,9 +34,9 @@ ARTIST_DETECTION_BLOCKLIST = {"fun."}
 # actual scoring layer randomly initialized (confirmed: a
 # "newly initialized: ['score.weight']" warning, meaning it would produce
 # meaningless scores). This is a community-converted checkpoint
-# specifically fixed for CrossEncoder compatibility - verified directly
-# that this one loads with real trained weights and produces sensible,
-# well-separated scores.
+# specifically fixed for CrossEncoder compatibility - confirmed this one
+# loads with real trained weights and produces sensible, well-separated
+# scores.
 RERANKER_MODEL_NAME = "tomaarsen/Qwen3-Reranker-0.6B-seq-cls"
 
 _reranker: CrossEncoder | None = None

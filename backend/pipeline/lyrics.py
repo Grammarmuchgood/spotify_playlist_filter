@@ -41,16 +41,17 @@ def _fetch_lyrics_raw(track_name: str, primary_artist: str) -> str | None:
 
 def fetch_lyrics(track_name: str, primary_artist: str) -> str | None:
     # Takes the primary artist directly (stored at fetch time from
-    # Spotify's own artist list) rather than deriving it here by splitting
-    # a joined artist string - that split silently breaks for any artist
-    # whose own name contains a comma (e.g. "Tyler, The Creator"), since
-    # there's no way to tell "a comma separating two artists" apart from
-    # "a comma inside one artist's name" after they've already been joined.
+    # Spotify's own artist list) rather than deriving it here by
+    # splitting a joined artist string - that split silently breaks for
+    # any artist whose own name contains a comma (e.g. "Tyler, The
+    # Creator"), since there's no way to tell "a comma separating two
+    # artists" apart from "a comma inside one artist's name" after
+    # they've already been joined.
 
-    # Progressively more aggressive attempts, each only added when it would
-    # actually change something - stops at the first one that succeeds.
-    # Ordered from least to most aggressive so a title that already works
-    # exactly as-is never gets an unnecessary extra request.
+    # Progressively more aggressive attempts, each only added when it
+    # would actually change something - stops at the first one that
+    # succeeds. Ordered from least to most aggressive so a title that
+    # already works exactly as-is never gets an unnecessary extra request.
     title = track_name
     candidates = [(title, primary_artist)]
 
@@ -74,8 +75,8 @@ def fetch_lyrics(track_name: str, primary_artist: str) -> str | None:
 def fetch_and_store_lyrics(limit: int | None = None, user_id: str | None = None) -> dict:
     conn = get_connection(user_id)
     # Only rows never attempted - '' (set below for "confirmed no lyrics
-    # found") is NOT NULL, so it's correctly skipped on future runs rather
-    # than being re-queried forever.
+    # found") is NOT NULL, so it's correctly skipped on future runs
+    # rather than being re-queried forever.
     query = "SELECT track_id, name, artist, primary_artist FROM songs WHERE lyrics IS NULL"
     if limit is not None:
         query += f" LIMIT {int(limit)}"
