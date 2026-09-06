@@ -149,7 +149,7 @@ def test_playlist_status_reports_real_progress(logged_in_client):
 
 
 # ============================================================
-# /search's new playlist_id parameter, against the real migrated account
+# /search's playlist_id parameter, against the real migrated account
 # ============================================================
 
 def test_search_with_playlist_id_scopes_to_the_real_migrated_playlist(client):
@@ -157,8 +157,15 @@ def test_search_with_playlist_id_scopes_to_the_real_migrated_playlist(client):
     # Deliberately NOT using the tmp_path isolation fixture's user_id here
     # - this reads the account holder's real, migrated production data on
     # purpose, the same way test_auth.py's existing tests do.
+    # "When" specifically, by ID - not an unscoped LIMIT 1, which stopped
+    # reliably returning this one once real usage added more playlists
+    # (Metal, Big artists big songs) as genuine additional rows in the
+    # same table. This test needs a playlist with real Rock-bucketed
+    # songs, which "When" specifically has - not just any processed one.
     conn = get_connection("peter.dinning0507")
-    real_playlist_id = conn.execute("SELECT playlist_id FROM playlists LIMIT 1").fetchone()["playlist_id"]
+    real_playlist_id = conn.execute(
+        "SELECT playlist_id FROM playlists WHERE playlist_id = ?", ("4Jlag9nPT6xEKjNa515hUB",)
+    ).fetchone()["playlist_id"]
     conn.close()
 
     response = client.get("/search", params={"q": "rock songs", "top_n": 3, "playlist_id": real_playlist_id})

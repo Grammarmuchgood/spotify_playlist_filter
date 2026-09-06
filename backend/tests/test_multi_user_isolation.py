@@ -61,19 +61,32 @@ def test_user_meta_table_only_created_for_real_users(tmp_path, monkeypatch):
 
 
 def test_migrated_account_holder_data_is_reachable_via_real_user_id():
-    # Confirms the actual migration performed this session: the account
-    # holder's existing 649-track corpus is reachable through their real
-    # Spotify user_id, not just the legacy no-user_id path. user_meta
-    # itself only carries account identity now (processing_status moved
-    # to the per-playlist `playlists` table in Step 3, since a user can
-    # have several playlists in different states at once - see
-    # test_playlist_processing.py for that table's own coverage).
+    # Confirms the actual migration this account went through: the
+    # original 649-track corpus is reachable through the real Spotify
+    # user_id, not just the legacy no-user_id path. user_meta itself only
+    # carries account identity now - processing_status moved to the
+    # per-playlist `playlists` table once multi-user playlists existed,
+    # since a user can have several playlists in different states at
+    # once (see test_playlist_processing.py for that table's own coverage).
     conn = get_connection("peter.dinning0507")
     songs_count = conn.execute("SELECT COUNT(*) as n FROM songs").fetchone()["n"]
     meta = conn.execute("SELECT * FROM user_meta WHERE spotify_user_id = ?", ("peter.dinning0507",)).fetchone()
-    playlist = conn.execute("SELECT * FROM playlists LIMIT 1").fetchone()
+    # Scoped to the specific playlist this test is actually about ("When"),
+    # not an unscoped LIMIT 1 - that was only ever safe while it was the
+    # sole row in this table. Real usage since has added more real
+    # playlists, so an unordered LIMIT 1 stopped reliably returning this
+    # one at all.
+    playlist = conn.execute(
+        "SELECT * FROM playlists WHERE playlist_id = ?", ("4Jlag9nPT6xEKjNa515hUB",)
+    ).fetchone()
     conn.close()
-    assert songs_count == 649
+    # >=, not == - this test's job is confirming the migrated corpus is
+    # still reachable, not that it's frozen at its original size. It's
+    # genuinely grown since (real playlists processed during later
+    # live testing add real new songs) - an exact equality here would
+    # just go stale again the next time that happens, the same fragility
+    # just fixed above for the playlists table.
+    assert songs_count >= 649
     assert meta is not None
     assert playlist is not None
     assert playlist["processing_status"] == "complete"
