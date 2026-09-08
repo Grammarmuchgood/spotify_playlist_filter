@@ -37,7 +37,7 @@ def evaluate() -> dict:
     eval_rows = load_eval_set()
     conn = get_connection()
 
-    # Two independent pieces of text per song: what you wrote by hand
+    # Two independent pieces of text per song: what was hand-written
     # (mood/context_tags/notes) vs. what the pipeline generated
     # (description) - comparing rankings built from these two separately
     # tests real agreement, not the pipeline agreeing with itself.
