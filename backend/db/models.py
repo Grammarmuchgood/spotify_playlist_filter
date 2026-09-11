@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
+
 from db.database import get_connection
 
 # One row per track. track_id is Spotify's own ID used directly as the
@@ -61,5 +63,43 @@ def init_db(user_id: str | None = None) -> None:
     conn.execute(CREATE_SONGS_TABLE)
     if user_id is not None:
         conn.execute(CREATE_USER_META_TABLE)
+    conn.commit()
+    conn.close()
+
+
+def upsert_user_meta(user_id: str, **fields) -> None:
+    """Creates a user's own account-state row on their first login
+    (called from main.py's /callback), or updates specific fields on
+    later calls - e.g. selected_playlist_id once they pick a playlist,
+    processing_status as ingestion progresses. last_active_at is always
+    refreshed, even when called with no other fields.
+
+    **fields becomes column names interpolated directly into the SQL
+    below (values stay parameterized, as everywhere else in this
+    codebase) - safe here specifically because every call site in this
+    codebase passes fields as literal, hand-written keyword arguments
+    (e.g. upsert_user_meta(user_id, processing_status="complete")),
+    never raw values taken from a request. This function should never be
+    called with a **fields dict built from user-controlled input."""
+    conn = get_connection(user_id)
+    conn.execute(CREATE_USER_META_TABLE)
+    now = datetime.now(timezone.utc).isoformat()
+
+    existing = conn.execute("SELECT 1 FROM user_meta WHERE spotify_user_id = ?", (user_id,)).fetchone()
+    if existing is None:
+        conn.execute(
+            "INSERT INTO user_meta (spotify_user_id, created_at, last_active_at) VALUES (?, ?, ?)",
+            (user_id, now, now),
+        )
+
+    if fields:
+        set_clause = ", ".join(f"{key} = ?" for key in fields)
+        conn.execute(
+            f"UPDATE user_meta SET {set_clause}, last_active_at = ? WHERE spotify_user_id = ?",
+            (*fields.values(), now, user_id),
+        )
+    else:
+        conn.execute("UPDATE user_meta SET last_active_at = ? WHERE spotify_user_id = ?", (now, user_id))
+
     conn.commit()
     conn.close()

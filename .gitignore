@@ -7,6 +7,12 @@ node_modules/
 *.db
 *.sqlite3
 .spotify_token_cache
+# Real per-user data (databases + OAuth token caches) - *.db and the
+# legacy .spotify_token_cache above already cover most of this, but the
+# per-user token cache filename (.token_cache) doesn't match either
+# pattern, so excluding the whole directory is the safer, complete fix
+# rather than enumerating filenames one at a time.
+backend/data/users/
 .DS_Store
 .vscode/
 .idea/

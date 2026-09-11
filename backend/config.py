@@ -44,6 +44,20 @@ class Settings(BaseSettings):
     # user, not one shared database - see get_connection().
     user_data_dir: str = "./backend/data/users"
 
+    # No default - a weak or guessable secret here would let anyone forge
+    # a valid-looking session cookie for any user_id, defeating the whole
+    # point of signing it in the first place. Generated once via
+    # secrets.token_hex(32), not typed by hand, and kept only in .env
+    # (never committed) - the same treatment as every other credential
+    # in this file.
+    session_secret_key: str
+
+    # False locally (this app runs on plain http://localhost in dev, and
+    # a Secure-flagged cookie is never sent over plain HTTP at all - the
+    # login would silently appear to fail). Set to true in production,
+    # where the app is only ever served over HTTPS.
+    session_cookie_secure: bool = False
+
 
 # lru_cache with no arguments makes this a de facto singleton: the first
 # call builds and validates Settings() once; every later call anywhere in
