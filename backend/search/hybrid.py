@@ -49,11 +49,14 @@ def get_reranker() -> CrossEncoder:
     return _reranker
 
 
-def _fetch_songs() -> tuple[list[dict], dict[str, np.ndarray]]:
+def _fetch_songs(user_id: str | None = None) -> tuple[list[dict], dict[str, np.ndarray]]:
     """Splits metadata from embeddings on purpose - result dicts get
     handed straight back to callers, and a raw embedding vector has no
-    business showing up in search output."""
-    conn = get_connection()
+    business showing up in search output. user_id=None (the default)
+    reads the legacy single-user database; a real user_id reads that
+    user's own, entirely separate database file - see
+    db.database.get_connection."""
+    conn = get_connection(user_id)
     rows = conn.execute(
         "SELECT track_id, name, artist, primary_artist, embedding, genre_bucket, description FROM songs WHERE embedding IS NOT NULL"
     ).fetchall()
@@ -184,7 +187,9 @@ def _rerank(query: str, candidates: list[dict], match_type: str) -> list[dict]:
     return candidates
 
 
-def hybrid_search(query: str, top_n: int = 20, rrf_k: int = RRF_K, shortlist_size: int = SHORTLIST_SIZE) -> dict:
+def hybrid_search(
+    query: str, top_n: int = 20, rrf_k: int = RRF_K, shortlist_size: int = SHORTLIST_SIZE, user_id: str | None = None
+) -> dict:
     """Vibe-only queries are ranked by RRF-fused vibe + genre similarity
     (stage 1, cheap, full corpus), narrowed to a shortlist, then reordered
     by the cross-encoder reranker (stage 2, slower, shortlist only).
@@ -269,7 +274,7 @@ def hybrid_search(query: str, top_n: int = 20, rrf_k: int = RRF_K, shortlist_siz
     library matches confidently), this falls back to a normal text query
     using the full original query - resolution is a bonus when it's
     confident, never a hard requirement."""
-    songs, embeddings = _fetch_songs()
+    songs, embeddings = _fetch_songs(user_id)
     known_artists = {s["primary_artist"] for s in songs if s["primary_artist"]}
     artist_aliases = build_artist_aliases(known_artists)
 

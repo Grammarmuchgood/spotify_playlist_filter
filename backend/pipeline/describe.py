@@ -76,8 +76,8 @@ def describe_song(client: Anthropic, track_name: str, artist: str, genre: str | 
     return response.parsed_output
 
 
-def fetch_and_store_descriptions(limit: int | None = None) -> dict:
-    conn = get_connection()
+def fetch_and_store_descriptions(limit: int | None = None, user_id: str | None = None) -> dict:
+    conn = get_connection(user_id)
     client = Anthropic(api_key=get_settings().anthropic_api_key)
     energy_thresholds_by_cohort = compute_thresholds(conn)["energy_rms"]
 

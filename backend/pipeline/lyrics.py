@@ -71,8 +71,8 @@ def fetch_lyrics(track_name: str, primary_artist: str) -> str | None:
     return None
 
 
-def fetch_and_store_lyrics(limit: int | None = None) -> dict:
-    conn = get_connection()
+def fetch_and_store_lyrics(limit: int | None = None, user_id: str | None = None) -> dict:
+    conn = get_connection(user_id)
     # Only rows never attempted - '' (set below for "confirmed no lyrics
     # found") is NOT NULL, so it's correctly skipped on future runs rather
     # than being re-queried forever.

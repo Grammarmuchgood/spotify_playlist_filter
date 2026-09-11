@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from datetime import datetime, timezone
 
 from auth.spotify_oauth import get_spotify_client
@@ -24,9 +26,9 @@ def fetch_playlist_items(playlist_id: str) -> list[dict]:
     return items
 
 
-def save_tracks(items: list[dict]) -> int:
-    init_db()
-    conn = get_connection()
+def save_tracks(items: list[dict], user_id: str | None = None) -> int:
+    init_db(user_id)
+    conn = get_connection(user_id)
     now = datetime.now(timezone.utc).isoformat()
     count = 0
     for entry in items:
@@ -95,6 +97,6 @@ def save_tracks(items: list[dict]) -> int:
     return count
 
 
-def fetch_and_store(playlist_id: str = TARGET_PLAYLIST_ID) -> int:
+def fetch_and_store(playlist_id: str = TARGET_PLAYLIST_ID, user_id: str | None = None) -> int:
     items = fetch_playlist_items(playlist_id)
-    return save_tracks(items)
+    return save_tracks(items, user_id)

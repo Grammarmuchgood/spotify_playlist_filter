@@ -234,8 +234,8 @@ def process_song(track_name: str, primary_artist: str, duration_ms: int) -> dict
     return features
 
 
-def fetch_and_store_audio_features(limit: int | None = None) -> dict:
-    conn = get_connection()
+def fetch_and_store_audio_features(limit: int | None = None, user_id: str | None = None) -> dict:
+    conn = get_connection(user_id)
     # Only process rows that haven't been done yet - makes this safely
     # re-runnable/resumable if it's interrupted partway through.
     query = "SELECT track_id, name, artist, primary_artist, duration_ms FROM songs WHERE audio_features IS NULL"
@@ -273,10 +273,10 @@ def fetch_and_store_audio_features(limit: int | None = None) -> dict:
     return counts
 
 
-def backfill_genre() -> int:
+def backfill_genre(user_id: str | None = None) -> int:
     """For rows processed before itunes_genre was captured: re-run just the cheap
     iTunes search (no audio download/Librosa) to fill in the missing field."""
-    conn = get_connection()
+    conn = get_connection(user_id)
     rows = conn.execute("SELECT track_id, name, artist, primary_artist, duration_ms, audio_features FROM songs WHERE audio_features IS NOT NULL").fetchall()
 
     count = 0
@@ -361,14 +361,14 @@ def _fetch_musicbrainz_artist_genre(artist_name: str) -> str | None:
     return top_genre["name"]
 
 
-def backfill_genre_musicbrainz() -> int:
+def backfill_genre_musicbrainz(user_id: str | None = None) -> int:
     """Adds genre from MusicBrainz specifically for tracks with no iTunes
     match at all - there's no audio and no itunes_genre possible for these,
     so this is a genuinely different data source, not a duplicate lookup.
     Caches by artist within this run (not per-song) since genre is really
     an artist-level fact on MusicBrainz, and several of the unmatched
     tracks share an artist (e.g. multiple Kanye West / MF DOOM tracks)."""
-    conn = get_connection()
+    conn = get_connection(user_id)
     rows = conn.execute("SELECT track_id, artist, primary_artist, audio_features FROM songs WHERE audio_features IS NOT NULL").fetchall()
 
     cache: dict[str, str | None] = {}
@@ -497,8 +497,8 @@ def describe_features(features: dict, thresholds: dict, year: int | None = None)
     return f"{tempo_word}, {energy_word}, {timbre_word}, {texture_word}"
 
 
-def generate_descriptions() -> int:
-    conn = get_connection()
+def generate_descriptions(user_id: str | None = None) -> int:
+    conn = get_connection(user_id)
     thresholds = compute_thresholds(conn)
     rows = conn.execute("SELECT track_id, release_date, audio_features FROM songs WHERE audio_features IS NOT NULL").fetchall()
 

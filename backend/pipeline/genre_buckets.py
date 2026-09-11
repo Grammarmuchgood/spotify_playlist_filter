@@ -164,7 +164,7 @@ def _genre_text_for(audio_features_json: str | None, description_json: str | Non
     return "unknown"
 
 
-def reclassify_with_llm(track_ids: list[str]) -> int:
+def reclassify_with_llm(track_ids: list[str], user_id: str | None = None) -> int:
     """Targeted, cheap fix for specific known-mismatched tracks - not a full
     corpus pass. Uses the song's own generated description (built from that
     track's real lyrics/audio) as context, not the raw genre string, so it's
@@ -175,7 +175,7 @@ def reclassify_with_llm(track_ids: list[str]) -> int:
     class GenreClassification(BaseModel):
         genre: str
 
-    conn = get_connection()
+    conn = get_connection(user_id)
     client = Anthropic(api_key=get_settings().anthropic_api_key)
     options = ", ".join(CANONICAL_GENRES)
 
@@ -212,8 +212,8 @@ def reclassify_with_llm(track_ids: list[str]) -> int:
     return count
 
 
-def assign_genre_buckets() -> int:
-    conn = get_connection()
+def assign_genre_buckets(user_id: str | None = None) -> int:
+    conn = get_connection(user_id)
     rows = conn.execute(
         "SELECT track_id, audio_features, description FROM songs WHERE genre_bucket IS NULL"
     ).fetchall()

@@ -33,8 +33,16 @@ class Settings(BaseSettings):
     genius_api_key: str
 
     # Has a default, so it's optional - falls back to local SQLite if
-    # DATABASE_URL isn't set in the environment.
+    # DATABASE_URL isn't set in the environment. This is the single-user
+    # legacy path, still used whenever get_connection() is called with no
+    # user_id - kept working, not removed, so every existing script and
+    # test keeps running unchanged during the move to multi-user.
     database_url: str = "sqlite:///./backend/data/vibe_filter.db"
+
+    # Base directory each real user's own isolated database lives under:
+    # {user_data_dir}/{spotify_user_id}/vibe_filter.db. One directory per
+    # user, not one shared database - see get_connection().
+    user_data_dir: str = "./backend/data/users"
 
 
 # lru_cache with no arguments makes this a de facto singleton: the first

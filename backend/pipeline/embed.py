@@ -26,8 +26,8 @@ def cosine_similarity(a: np.ndarray, b: np.ndarray) -> float:
     return float(np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b)))
 
 
-def embed_and_store() -> int:
-    conn = get_connection()
+def embed_and_store(user_id: str | None = None) -> int:
+    conn = get_connection(user_id)
     # Only rows with a description but no embedding yet - safely
     # re-runnable/resumable, same pattern as every other pipeline stage.
     rows = conn.execute(

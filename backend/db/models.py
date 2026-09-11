@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from db.database import get_connection
 
 # One row per track. track_id is Spotify's own ID used directly as the
@@ -28,13 +30,36 @@ CREATE TABLE IF NOT EXISTS songs (
 )
 """
 
+# One row, in each user's own database file - account/processing state
+# for that user, separate from their song data. Lives alongside `songs`
+# in the same per-user file rather than a shared "users" table, so a
+# user's whole world (their own songs AND their own account state) stays
+# in one portable file - the same reason per-user files were chosen for
+# `songs` at all (see db.database.get_connection). Doesn't exist in the
+# legacy single-user database, since there's exactly one user there and
+# nothing to track per-user.
+CREATE_USER_META_TABLE = """
+CREATE TABLE IF NOT EXISTS user_meta (
+    spotify_user_id TEXT PRIMARY KEY,
+    display_name TEXT,
+    selected_playlist_id TEXT,
+    selected_playlist_name TEXT,
+    song_count INTEGER,
+    processing_status TEXT NOT NULL DEFAULT 'pending',
+    created_at TEXT NOT NULL,
+    last_active_at TEXT
+)
+"""
 
-def init_db() -> None:
-    conn = get_connection()
+
+def init_db(user_id: str | None = None) -> None:
+    conn = get_connection(user_id)
     # IF NOT EXISTS makes this safe to call every time (it's called at
     # the top of fetch_playlist.py's flow) - does nothing if the table's
     # already there. Note: this does NOT alter an existing table if the
     # schema changes later - that requires rebuilding the .db file.
     conn.execute(CREATE_SONGS_TABLE)
+    if user_id is not None:
+        conn.execute(CREATE_USER_META_TABLE)
     conn.commit()
     conn.close()
