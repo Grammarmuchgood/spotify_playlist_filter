@@ -9,8 +9,12 @@ from db.models import init_db
 TARGET_PLAYLIST_ID = "4Jlag9nPT6xEKjNa515hUB"  # "When"
 
 
-def fetch_playlist_items(playlist_id: str) -> list[dict]:
-    sp = get_spotify_client()
+def fetch_playlist_items(playlist_id: str, user_id: str | None = None) -> list[dict]:
+    # Must be this specific user's own authenticated client, not the
+    # legacy default - confirmed missing before Step 3, the first time
+    # this function was ever called for anyone other than the single
+    # legacy user, where the gap couldn't have shown up at all.
+    sp = get_spotify_client(user_id)
     # Spotify's Feb 2026 migration renamed this endpoint from /tracks to
     # /items - sp._get() is used (instead of a spotipy named helper)
     # because spotipy hasn't been updated for the rename yet.
@@ -98,5 +102,5 @@ def save_tracks(items: list[dict], user_id: str | None = None) -> int:
 
 
 def fetch_and_store(playlist_id: str = TARGET_PLAYLIST_ID, user_id: str | None = None) -> int:
-    items = fetch_playlist_items(playlist_id)
+    items = fetch_playlist_items(playlist_id, user_id)
     return save_tracks(items, user_id)

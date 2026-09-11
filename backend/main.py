@@ -1,7 +1,7 @@
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import Depends, FastAPI, HTTPException, Request
+from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Request
 from fastapi.responses import RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.sessions import SessionMiddleware
@@ -14,9 +14,11 @@ from auth.spotify_oauth import (
     save_token_for_user,
 )
 from config import get_settings
+from db.database import get_connection
 from db.models import init_db, upsert_user_meta
 from pipeline.embed import get_model
 from pipeline.genre_buckets import get_bucket_embeddings
+from pipeline.process_playlist import TERMINAL_STATUSES, process_playlist
 from search.hybrid import get_reranker, hybrid_search
 
 
@@ -157,14 +159,84 @@ def me(user_id: str = Depends(get_current_user_id)):
 
 
 @app.get("/search")
-def search(q: str, top_n: int = 20, user_id: str = Depends(get_current_user_id)):
+def search(
+    q: str, top_n: int = 20, playlist_id: str | None = None, user_id: str = Depends(get_current_user_id)
+):
     # Depends(get_current_user_id) means this line never runs at all for
     # a request with no valid session - there is no path left here that
     # reaches anyone's data without a real, verified login. hybrid_search
     # returns {"results", "detected", "exact_match_count"} - spread
     # alongside "query" for a flat top-level response the frontend can
     # use to tell "no exact matches" apart from a fully-satisfied one.
-    return {"query": q, **hybrid_search(q, top_n=top_n, user_id=user_id)}
+    # playlist_id=None searches everything this user has ever processed,
+    # across every playlist at once - a real playlist_id scopes results
+    # to just that one (see search.hybrid._fetch_songs).
+    return {"query": q, **hybrid_search(q, top_n=top_n, user_id=user_id, playlist_id=playlist_id)}
+
+
+@app.get("/playlists")
+def list_playlists(user_id: str = Depends(get_current_user_id)):
+    # The front page's picker data - every real playlist this Spotify
+    # account has, not just ones already processed, so a user can pick
+    # a brand new one too. Paginated the same way fetch_playlist_items
+    # pages through a single playlist's tracks: follow results["next"]
+    # until Spotify stops returning one.
+    sp = get_spotify_client(user_id)
+    playlists = []
+    results = sp.current_user_playlists()
+    while True:
+        for p in results["items"]:
+            playlists.append({
+                "id": p["id"],
+                "name": p["name"],
+                # Post-Feb-2026-migration shape, confirmed directly
+                # against the live API - see process_playlist's matching
+                # comment on the same rename.
+                "track_count": p["items"]["total"],
+                "image_url": p["images"][0]["url"] if p["images"] else None,
+            })
+        if not results["next"]:
+            break
+        results = sp.next(results)
+    return {"playlists": playlists}
+
+
+@app.post("/playlists/{playlist_id}/process")
+def start_processing(playlist_id: str, background_tasks: BackgroundTasks, user_id: str = Depends(get_current_user_id)):
+    # Guards against a double-click or a page refresh starting a second,
+    # overlapping background run against the same playlist - checked
+    # BEFORE scheduling anything, not left to the background task itself
+    # to sort out, since two concurrent runs writing to the same rows has
+    # no well-defined outcome. init_db is called here (not just relied on
+    # from /callback at login) so this route works correctly even if
+    # somehow reached before a normal login ever ran it - IF NOT EXISTS
+    # makes the call itself free on every other request.
+    init_db(user_id)
+    conn = get_connection(user_id)
+    row = conn.execute("SELECT processing_status FROM playlists WHERE playlist_id = ?", (playlist_id,)).fetchone()
+    conn.close()
+    if row is not None and row["processing_status"] not in TERMINAL_STATUSES:
+        raise HTTPException(status_code=409, detail="This playlist is already being processed")
+
+    # add_task runs process_playlist AFTER this response is already sent
+    # back to the browser - a real playlist can take several minutes
+    # (audio downloads, lyrics lookups, an LLM call per song), which would
+    # otherwise leave the request hanging well past any sane timeout.
+    background_tasks.add_task(process_playlist, user_id, playlist_id)
+    return {"status": "started"}
+
+
+@app.get("/playlists/{playlist_id}/status")
+def playlist_status(playlist_id: str, user_id: str = Depends(get_current_user_id)):
+    # What the frontend polls every few seconds while a background run is
+    # in flight, to show "342 of 649" and know when search is ready.
+    init_db(user_id)
+    conn = get_connection(user_id)
+    row = conn.execute("SELECT * FROM playlists WHERE playlist_id = ?", (playlist_id,)).fetchone()
+    conn.close()
+    if row is None:
+        raise HTTPException(status_code=404, detail="This playlist hasn't been processed yet")
+    return dict(row)
 
 
 # Mounted last and deliberately last - Starlette matches routes in

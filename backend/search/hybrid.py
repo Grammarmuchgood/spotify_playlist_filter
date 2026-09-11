@@ -49,17 +49,35 @@ def get_reranker() -> CrossEncoder:
     return _reranker
 
 
-def _fetch_songs(user_id: str | None = None) -> tuple[list[dict], dict[str, np.ndarray]]:
+def _fetch_songs(user_id: str | None = None, playlist_id: str | None = None) -> tuple[list[dict], dict[str, np.ndarray]]:
     """Splits metadata from embeddings on purpose - result dicts get
     handed straight back to callers, and a raw embedding vector has no
     business showing up in search output. user_id=None (the default)
     reads the legacy single-user database; a real user_id reads that
     user's own, entirely separate database file - see
-    db.database.get_connection."""
+    db.database.get_connection.
+
+    playlist_id=None (the default) searches every song the user has ever
+    processed, across all their playlists at once - a free side effect of
+    songs never being duplicated per playlist (see db.models's
+    CREATE_PLAYLIST_SONGS_TABLE). A real playlist_id joins through
+    playlist_songs to scope results to just that one playlist."""
     conn = get_connection(user_id)
-    rows = conn.execute(
-        "SELECT track_id, name, artist, primary_artist, embedding, genre_bucket, description FROM songs WHERE embedding IS NOT NULL"
-    ).fetchall()
+    if playlist_id is None:
+        rows = conn.execute(
+            "SELECT track_id, name, artist, primary_artist, embedding, genre_bucket, description FROM songs WHERE embedding IS NOT NULL"
+        ).fetchall()
+    else:
+        rows = conn.execute(
+            """
+            SELECT songs.track_id, songs.name, songs.artist, songs.primary_artist,
+                   songs.embedding, songs.genre_bucket, songs.description
+            FROM songs
+            JOIN playlist_songs ON songs.track_id = playlist_songs.track_id
+            WHERE playlist_songs.playlist_id = ? AND songs.embedding IS NOT NULL
+            """,
+            (playlist_id,),
+        ).fetchall()
     conn.close()
 
     songs = []
@@ -188,7 +206,12 @@ def _rerank(query: str, candidates: list[dict], match_type: str) -> list[dict]:
 
 
 def hybrid_search(
-    query: str, top_n: int = 20, rrf_k: int = RRF_K, shortlist_size: int = SHORTLIST_SIZE, user_id: str | None = None
+    query: str,
+    top_n: int = 20,
+    rrf_k: int = RRF_K,
+    shortlist_size: int = SHORTLIST_SIZE,
+    user_id: str | None = None,
+    playlist_id: str | None = None,
 ) -> dict:
     """Vibe-only queries are ranked by RRF-fused vibe + genre similarity
     (stage 1, cheap, full corpus), narrowed to a shortlist, then reordered
@@ -274,7 +297,7 @@ def hybrid_search(
     library matches confidently), this falls back to a normal text query
     using the full original query - resolution is a bonus when it's
     confident, never a hard requirement."""
-    songs, embeddings = _fetch_songs(user_id)
+    songs, embeddings = _fetch_songs(user_id, playlist_id)
     known_artists = {s["primary_artist"] for s in songs if s["primary_artist"]}
     artist_aliases = build_artist_aliases(known_artists)
 

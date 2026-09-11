@@ -63,11 +63,18 @@ def test_user_meta_table_only_created_for_real_users(tmp_path, monkeypatch):
 def test_migrated_account_holder_data_is_reachable_via_real_user_id():
     # Confirms the actual migration performed this session: the account
     # holder's existing 649-track corpus is reachable through their real
-    # Spotify user_id, not just the legacy no-user_id path.
+    # Spotify user_id, not just the legacy no-user_id path. user_meta
+    # itself only carries account identity now (processing_status moved
+    # to the per-playlist `playlists` table in Step 3, since a user can
+    # have several playlists in different states at once - see
+    # test_playlist_processing.py for that table's own coverage).
     conn = get_connection("peter.dinning0507")
     songs_count = conn.execute("SELECT COUNT(*) as n FROM songs").fetchone()["n"]
     meta = conn.execute("SELECT * FROM user_meta WHERE spotify_user_id = ?", ("peter.dinning0507",)).fetchone()
+    playlist = conn.execute("SELECT * FROM playlists LIMIT 1").fetchone()
     conn.close()
     assert songs_count == 649
     assert meta is not None
-    assert meta["processing_status"] == "complete"
+    assert playlist is not None
+    assert playlist["processing_status"] == "complete"
+    assert playlist["processed_count"] == 649
