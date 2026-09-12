@@ -29,8 +29,6 @@ class Settings(BaseSettings):
     spotify_redirect_uri: str
 
     anthropic_api_key: str
-    embedding_api_key: str
-    genius_api_key: str
 
     # Has a default, so it's optional - falls back to local SQLite if
     # DATABASE_URL isn't set in the environment. This is the single-user
@@ -57,6 +55,18 @@ class Settings(BaseSettings):
     # login would silently appear to fail). Set to true in production,
     # where the app is only ever served over HTTPS.
     session_cookie_secure: bool = False
+
+    # Where /callback sends the browser once login finishes. "/" (a
+    # relative redirect, resolving to wherever /callback itself was
+    # reached) is correct in production, where the built frontend is
+    # served by this same backend - one origin, nothing to redirect
+    # across. In dev, Spotify's own redirect always lands on THIS
+    # backend's port (whatever SPOTIFY_REDIRECT_URI says) regardless of
+    # which port the frontend dev server is actually running on - a
+    # relative "/" would strand the browser on the backend's own static
+    # files instead of sending it back to the frontend being worked on.
+    # Set to the frontend dev server's full URL locally.
+    frontend_url: str = "/"
 
 
 # lru_cache with no arguments makes this a de facto singleton: the first
