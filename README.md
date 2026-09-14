@@ -4,7 +4,7 @@ Natural-language vibe search over your own Spotify library. Type — or say — 
 
 Spotify's own search only matches titles and artist names; it has no idea what a song *feels* like. This does.
 
-<!-- Demo: record a short screen capture (connect → pick a playlist → watch it process → search a vibe → queue a result) and drop it here, e.g. ![demo](docs/demo.gif) -->
+![Demo: connecting Spotify, picking a playlist, searching a vibe, and queueing a result](docs/demo.gif)
 
 ## What it actually does
 
